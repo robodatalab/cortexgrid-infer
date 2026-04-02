@@ -1,0 +1,19 @@
+[project]
+name = "model-gateway"
+version = "0.1.0"
+description = "Deploy and interact with LLMs across providers (Anthropic, HuggingFace)"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+]
+
+[project.optional-dependencies]
+anthropic = [
+    "anthropic>=0.40.0",
+    "python-dotenv>=1.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
