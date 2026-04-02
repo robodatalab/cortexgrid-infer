@@ -18,12 +18,8 @@ from model_gateway.core import (
 )
 from model_gateway.utils import build_tool_map, normalize_tools
 
-try:
-    import anthropic
-    from dotenv import load_dotenv
-    _HAS_ANTHROPIC = True
-except ImportError:
-    _HAS_ANTHROPIC = False
+import anthropic
+from dotenv import load_dotenv
 
 
 def _to_anthropic_messages(
@@ -167,10 +163,6 @@ class AnthropicModel(DeployedModel):
 
 
 def deploy_anthropic(model_id: str) -> AnthropicModel:
-    if not _HAS_ANTHROPIC:
-        raise ImportError(
-            "Anthropic provider requires: pip install model-gateway[anthropic]"
-        )
     load_dotenv()
     actual_model_id = model_id.removeprefix("Anthropic/")
     client = anthropic.AsyncAnthropic()
