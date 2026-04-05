@@ -6,7 +6,15 @@ import abc
 from dataclasses import dataclass, field
 from functools import partial
 from collections.abc import AsyncIterator
-from typing import Any, Callable, Sequence, TypeVar, overload
+from typing import (
+    Any,
+    Callable,
+    Protocol,
+    Sequence,
+    TypeVar,
+    overload,
+    runtime_checkable,
+)
 
 
 @dataclass
@@ -40,14 +48,13 @@ ToolSpec = dict[str, Any]
 Tool = Callable[..., Any] | ToolSpec
 
 
-class DeployedModel(abc.ABC):
-    @property
-    @abc.abstractmethod
+@runtime_checkable
+class DeployedModel(Protocol):
     def name(self) -> str: ...
 
 
-class CompletingModel(DeployedModel):
-    @abc.abstractmethod
+@runtime_checkable
+class CompletingModel(DeployedModel, Protocol):
     def complete(
         self,
         messages: list[Message],
@@ -74,9 +81,7 @@ def register_provider(
 def deploy_model(model_id: str) -> CompletingModel: ...
 @overload
 def deploy_model(model_id: str, expected_type: type[T]) -> T: ...
-def deploy_model(
-    model_id: str, expected_type: type[DeployedModel] = CompletingModel
-) -> DeployedModel:
+def deploy_model(model_id: str, expected_type: Any = CompletingModel) -> DeployedModel:
     for prefix, factory in _providers:
         if not model_id.startswith(prefix):
             continue
