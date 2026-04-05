@@ -175,7 +175,7 @@ def _is_valid_anthropic_model(model_id: str) -> bool:
 
 def deploy_anthropic(model_id: str) -> AnthropicModel | None:
     load_dotenv()
-    actual_model_id = model_id.removeprefix("Anthropic/")
+    actual_model_id = model_id.removeprefix(_MODEL_PROVIDER_PREFIX)
     if not _is_valid_anthropic_model(actual_model_id):
         return None
 
@@ -183,4 +183,4 @@ def deploy_anthropic(model_id: str) -> AnthropicModel | None:
     return AnthropicModel(client=client, model_id=actual_model_id)
 
 
-register_provider("Anthropic/", deploy_anthropic)
+register_provider(_MODEL_PROVIDER_PREFIX, deploy_anthropic)

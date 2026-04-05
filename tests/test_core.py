@@ -171,32 +171,6 @@ class TestDeployModel(unittest.TestCase):
         self.assertIsInstance(model, CompletingModel)
         self.assertEqual(model.name, "fake/my-model")
 
-    def test_default_expected_type_rejects_non_completing_model(self):
-        register_provider("fake/", _FakeDeployedModel)
-        with self.assertRaises(TypeError) as ctx:
-            deploy_model("fake/my-model")
-        message = str(ctx.exception)
-        self.assertIn("fake/my-model", message)
-        self.assertIn("_FakeDeployedModel", message)
-        self.assertIn("CompletingModel", message)
-
-    def test_explicit_expected_type_matching(self):
-        register_provider("fake/", _FakeCompletingModel)
-        model = deploy_model("fake/my-model", _FakeCompletingModel)
-        self.assertIsInstance(model, _FakeCompletingModel)
-
-    def test_explicit_expected_type_base_deployed_model(self):
-        register_provider("fake/", _FakeDeployedModel)
-        model = deploy_model("fake/my-model", DeployedModel)
-        self.assertIsInstance(model, _FakeDeployedModel)
-        self.assertIsInstance(model, DeployedModel)
-
-    def test_explicit_expected_type_mismatch_raises_type_error(self):
-        register_provider("fake/", _FakeDeployedModel)
-        with self.assertRaises(TypeError) as ctx:
-            deploy_model("fake/my-model", _FakeCompletingModel)
-        self.assertIn("_FakeCompletingModel", str(ctx.exception))
-
     def test_factory_returning_none_skips_to_next_provider(self):
         register_provider("fake/", lambda _id: None)
         register_provider("fake/", _FakeCompletingModel)
@@ -253,9 +227,7 @@ class TestDeployModel(unittest.TestCase):
 class TestComplete(unittest.IsolatedAsyncioTestCase):
     async def test_yields_chunks(self):
         model = _StubModel("test")
-        chunks = [
-            c async for c in complete(model, [{"role": "user", "content": "hi"}])
-        ]
+        chunks = [c async for c in complete(model, [{"role": "user", "content": "hi"}])]
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0].content, "stub")
         self.assertEqual(chunks[0].finish_reason, "stop")

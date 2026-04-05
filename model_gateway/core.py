@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+import abc
 from dataclasses import dataclass, field
 from functools import partial
 from collections.abc import AsyncIterator
 from typing import (
     Any,
     Callable,
-    Protocol,
     Sequence,
     TypeVar,
     overload,
-    runtime_checkable,
 )
 
 
@@ -47,13 +46,14 @@ ToolSpec = dict[str, Any]
 Tool = Callable[..., Any] | ToolSpec
 
 
-@runtime_checkable
-class DeployedModel(Protocol):
+class DeployedModel(abc.ABC):
+    @property
+    @abc.abstractmethod
     def name(self) -> str: ...
 
 
-@runtime_checkable
-class CompletingModel(DeployedModel, Protocol):
+class CompletingModel(DeployedModel):
+    @abc.abstractmethod
     def complete(
         self,
         messages: list[Message],
@@ -76,22 +76,13 @@ def register_provider(
     _providers.append((prefix, factory))
 
 
-@overload
-def deploy_model(model_id: str) -> CompletingModel: ...
-@overload
-def deploy_model(model_id: str, expected_type: type[T]) -> T: ...
-def deploy_model(model_id: str, expected_type: Any = CompletingModel) -> DeployedModel:
+def deploy_model(model_id: str) -> DeployedModel:
     for prefix, factory in _providers:
         if not model_id.startswith(prefix):
             continue
         model = factory(model_id)
         if model is None:
             continue
-        if not isinstance(model, expected_type):
-            raise TypeError(
-                f"Model '{model_id}' deployed as {type(model).__name__}, "
-                f"expected {expected_type.__name__}"
-            )
         return model
     raise ValueError(
         f"No provider registered for model '{model_id}'. "
