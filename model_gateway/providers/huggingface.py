@@ -11,9 +11,6 @@ import json
 import re
 from typing import Any, Callable, Sequence
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
 from model_gateway.core import (
     CompletingModel,
     Message,
@@ -24,6 +21,9 @@ from model_gateway.core import (
 )
 from model_gateway.device import detect_device
 from model_gateway.utils import build_tool_map, normalize_tools
+from huggingface_hub.errors import RepositoryNotFoundError
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 _tool_call_id_counter = itertools.count()
@@ -218,17 +218,22 @@ class HuggingFaceModel(CompletingModel):
             yield CompletionChunk(finish_reason="stop")
 
 
-def deploy_huggingface(model_id: str) -> HuggingFaceModel:
+def deploy_huggingface(model_id: str) -> HuggingFaceModel | None:
     device = detect_device()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16)
-    model.to(device)  # type: ignore
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, torch_dtype=torch.float16
+        )
+        model.to(device)  # type: ignore
 
-    return HuggingFaceModel(model=model, tokenizer=tokenizer, device=str(device))
+        return HuggingFaceModel(model=model, tokenizer=tokenizer, device=str(device))
+    except (RepositoryNotFoundError, OSError):
+        return None
 
 
 register_provider("", deploy_huggingface)

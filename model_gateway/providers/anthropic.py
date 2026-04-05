@@ -18,8 +18,11 @@ from model_gateway.core import (
 )
 from model_gateway.utils import build_tool_map, normalize_tools
 
-import anthropic
+from anthropic import AsyncAnthropic, Anthropic, NotFoundError
 from dotenv import load_dotenv
+
+
+_MODEL_PROVIDER_PREFIX = "Anthropic/"
 
 
 def _to_anthropic_messages(
@@ -162,10 +165,21 @@ class AnthropicModel(CompletingModel):
                         yield CompletionChunk(finish_reason="stop")
 
 
-def deploy_anthropic(model_id: str) -> AnthropicModel:
+def _is_valid_anthropic_model(model_id: str) -> bool:
+    try:
+        Anthropic().models.retrieve(model_id)
+        return True
+    except NotFoundError:
+        return False
+
+
+def deploy_anthropic(model_id: str) -> AnthropicModel | None:
     load_dotenv()
     actual_model_id = model_id.removeprefix("Anthropic/")
-    client = anthropic.AsyncAnthropic()
+    if not _is_valid_anthropic_model(actual_model_id):
+        return None
+
+    client = AsyncAnthropic()
     return AnthropicModel(client=client, model_id=actual_model_id)
 
 

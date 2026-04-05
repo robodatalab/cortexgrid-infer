@@ -58,12 +58,14 @@ class CompletingModel(DeployedModel):
     ) -> AsyncIterator[CompletionChunk]: ...
 
 
-_providers: list[tuple[str, Callable[[str], DeployedModel]]] = []
+_providers: list[tuple[str, Callable[[str], DeployedModel | None]]] = []
 
 T = TypeVar("T", bound=DeployedModel)
 
 
-def register_provider(prefix: str, factory: Callable[[str], DeployedModel]) -> None:
+def register_provider(
+    prefix: str, factory: Callable[[str], DeployedModel | None]
+) -> None:
     """Register a model provider that handles model IDs starting with *prefix*."""
     _providers.append((prefix, factory))
 
@@ -76,14 +78,17 @@ def deploy_model(
     model_id: str, expected_type: type[DeployedModel] = CompletingModel
 ) -> DeployedModel:
     for prefix, factory in _providers:
-        if model_id.startswith(prefix):
-            model = factory(model_id)
-            if not isinstance(model, expected_type):
-                raise TypeError(
-                    f"Model '{model_id}' deployed as {type(model).__name__}, "
-                    f"expected {expected_type.__name__}"
-                )
-            return model
+        if not model_id.startswith(prefix):
+            continue
+        model = factory(model_id)
+        if model is None:
+            continue
+        if not isinstance(model, expected_type):
+            raise TypeError(
+                f"Model '{model_id}' deployed as {type(model).__name__}, "
+                f"expected {expected_type.__name__}"
+            )
+        return model
     raise ValueError(
         f"No provider registered for model '{model_id}'. "
         f"Known prefixes: {[p for p, _ in _providers]}"
