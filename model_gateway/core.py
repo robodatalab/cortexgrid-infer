@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import abc
 from dataclasses import dataclass, field
 from functools import partial
 from collections.abc import AsyncIterator
