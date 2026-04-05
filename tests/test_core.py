@@ -21,7 +21,7 @@ from model_gateway.core import (
 )
 
 
-class _StubModel(DeployedModel):
+class _StubModel(CompletingModel):
     def __init__(self, model_id: str) -> None:
         self._model_id = model_id
 
