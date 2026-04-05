@@ -1,6 +1,7 @@
 from model_gateway.core import (
     CompletionChunk,
     DeployedModel,
+    CompletingModel,
     Message,
     Tool,
     ToolCall,
@@ -16,6 +17,7 @@ from model_gateway.providers.huggingface import deploy_huggingface, HuggingFaceM
 __all__ = [
     "CompletionChunk",
     "DeployedModel",
+    "CompletingModel",
     "Message",
     "Tool",
     "ToolCall",
