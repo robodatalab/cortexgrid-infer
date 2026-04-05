@@ -15,7 +15,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from model_gateway.core import (
-    DeployedModel,
+    CompletingModel,
     Message,
     Tool,
     ToolCall,
@@ -92,7 +92,7 @@ def parse_tool_calls(
 
 
 @dataclass
-class HuggingFaceModel(DeployedModel):
+class HuggingFaceModel(CompletingModel):
     model: Any
     tokenizer: Any
     device: str
@@ -226,7 +226,7 @@ def deploy_huggingface(model_id: str) -> HuggingFaceModel:
         tokenizer.pad_token = tokenizer.eos_token
 
     model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float16)
-    model.to(device)
+    model.to(device)  # type: ignore
 
     return HuggingFaceModel(model=model, tokenizer=tokenizer, device=str(device))
 

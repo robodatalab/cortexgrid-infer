@@ -6,7 +6,7 @@ import abc
 from dataclasses import dataclass, field
 from functools import partial
 from collections.abc import AsyncIterator
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Sequence, TypeVar, overload
 
 
 @dataclass
@@ -41,11 +41,12 @@ Tool = Callable[..., Any] | ToolSpec
 
 
 class DeployedModel(abc.ABC):
-
     @property
     @abc.abstractmethod
     def name(self) -> str: ...
 
+
+class CompletingModel(DeployedModel):
     @abc.abstractmethod
     def complete(
         self,
@@ -59,16 +60,30 @@ class DeployedModel(abc.ABC):
 
 _providers: list[tuple[str, Callable[[str], DeployedModel]]] = []
 
+T = TypeVar("T", bound=DeployedModel)
+
 
 def register_provider(prefix: str, factory: Callable[[str], DeployedModel]) -> None:
     """Register a model provider that handles model IDs starting with *prefix*."""
     _providers.append((prefix, factory))
 
 
-def deploy_model(model_id: str) -> DeployedModel:
+@overload
+def deploy_model(model_id: str) -> CompletingModel: ...
+@overload
+def deploy_model(model_id: str, expected_type: type[T]) -> T: ...
+def deploy_model(
+    model_id: str, expected_type: type[DeployedModel] = CompletingModel
+) -> DeployedModel:
     for prefix, factory in _providers:
         if model_id.startswith(prefix):
-            return factory(model_id)
+            model = factory(model_id)
+            if not isinstance(model, expected_type):
+                raise TypeError(
+                    f"Model '{model_id}' deployed as {type(model).__name__}, "
+                    f"expected {expected_type.__name__}"
+                )
+            return model
     raise ValueError(
         f"No provider registered for model '{model_id}'. "
         f"Known prefixes: {[p for p, _ in _providers]}"
@@ -76,7 +91,7 @@ def deploy_model(model_id: str) -> DeployedModel:
 
 
 async def complete(
-    deployed_model: DeployedModel,
+    deployed_model: CompletingModel,
     messages: list[Message],
     tools: Sequence[Tool] | None = None,
     max_new_tokens: int = 2048,

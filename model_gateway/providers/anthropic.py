@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Sequence
 
 from model_gateway.core import (
-    DeployedModel,
+    CompletingModel,
     Message,
     Tool,
     ToolCall,
@@ -101,7 +101,7 @@ def _to_anthropic_tools(
 
 
 @dataclass
-class AnthropicModel(DeployedModel):
+class AnthropicModel(CompletingModel):
     client: Any
     model_id: str
 
