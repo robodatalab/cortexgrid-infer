@@ -1,0 +1,43 @@
+name: version-bump
+
+on:
+    push:
+        branches: [main]
+
+permissions:
+    contents: write
+
+concurrency:
+    group: version-bump
+    cancel-in-progress: false
+
+jobs:
+    bump:
+        runs-on: ubuntu-latest
+        if: github.event.head_commit.author.email != '41898282+github-actions[bot]@users.noreply.github.com'
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Bump patch and tag
+              run: |
+                  git config user.name  "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  for i in 1 2 3; do
+                    git fetch origin main
+                    git reset --hard origin/main
+                    CURRENT=$(grep -E '^version = ' pyproject.toml | head -1 | sed -E 's/version = "([^"]+)"/\1/')
+                    MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+                    MINOR=$(echo "$CURRENT" | cut -d. -f2)
+                    PATCH=$(echo "$CURRENT" | cut -d. -f3)
+                    NEW="$MAJOR.$MINOR.$((PATCH+1))"
+                    sed -i -E "s/^version = \"$CURRENT\"/version = \"$NEW\"/" pyproject.toml
+                    git add pyproject.toml
+                    git diff --cached --quiet && exit 0
+                    git commit -m "bump version to $NEW"
+                    git tag "v$NEW"
+                    git push origin HEAD:main --follow-tags && exit 0
+                    sleep 3
+                  done
+                  exit 1
