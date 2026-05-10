@@ -1,6 +1,6 @@
 [project]
 name = "model-gateway"
-version = "0.1.0"
+version = "0.1.1"
 description = "Deploy and interact with LLMs across providers (Anthropic, HuggingFace)"
 requires-python = ">=3.11"
 dependencies = [
