@@ -9,3 +9,4 @@ build/
 venv/
 .env
 uv.lock
+.claude
