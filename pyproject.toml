@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-cortexflow = { git = "https://github.com/paksas/robolab-infra.git"}
+cortexflow = { git = "https://github.com/robodatalab/robolab-infra.git"}
 
 [project.optional-dependencies]
 dev = [
