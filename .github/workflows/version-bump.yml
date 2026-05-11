@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
     bump:
-        runs-on: self-hosted
+        runs-on: arc-runners
         if: github.event.head_commit.author.email != '41898282+github-actions[bot]@users.noreply.github.com'
         steps:
             - uses: actions/checkout@v4

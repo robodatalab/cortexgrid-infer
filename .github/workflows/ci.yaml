@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    runs-on: self-hosted
+    runs-on: arc-runners
     strategy:
       matrix:
         python-version: ["3.11", "3.12"]
