@@ -21,6 +21,9 @@ jobs:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
 
+      - name: Configure git auth for private dependencies
+        run: git config --global url."https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
       - name: Install dependencies
         run: uv sync --extra dev
         env:
