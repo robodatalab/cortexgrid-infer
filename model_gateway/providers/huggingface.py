@@ -1,8 +1,8 @@
-"""HuggingFace model deployment with streaming and tool call parsing."""
+"""HuggingFace provider: deploys models via cortexflow and clients them over HTTP."""
 
 from __future__ import annotations
 
-import asyncio
+import tempfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from functools import partial
@@ -10,6 +10,11 @@ import itertools
 import json
 import re
 from typing import Any, Callable, Sequence
+
+import cortexflow
+import httpx
+from huggingface_hub import snapshot_download
+from huggingface_hub.errors import RepositoryNotFoundError
 
 from model_gateway.core import (
     CompletingModel,
@@ -19,11 +24,8 @@ from model_gateway.core import (
     CompletionChunk,
     register_provider,
 )
-from model_gateway.device import detect_device
+from model_gateway.providers.huggingface_serve import HuggingFaceDeployment
 from model_gateway.utils import build_tool_map, normalize_tools
-from huggingface_hub.errors import RepositoryNotFoundError
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 
 _tool_call_id_counter = itertools.count()
@@ -93,13 +95,12 @@ def parse_tool_calls(
 
 @dataclass
 class HuggingFaceModel(CompletingModel):
-    model: Any
-    tokenizer: Any
-    device: str
+    url: str
+    model_id: str
 
     @property
     def name(self) -> str:
-        return self.tokenizer.name_or_path
+        return self.model_id
 
     async def complete(
         self,
@@ -112,96 +113,51 @@ class HuggingFaceModel(CompletingModel):
         repetition_penalty: float = 1.0,
         **kwargs: Any,
     ) -> AsyncIterator[CompletionChunk]:
-        from threading import Thread
-        from transformers import TextIteratorStreamer
-
-        model = self.model
-        tokenizer = self.tokenizer
         tool_specs = normalize_tools(tools)
         tool_map = build_tool_map(tools)
 
-        prompt = tokenizer.apply_chat_template(
-            messages,
-            tools=tool_specs,
-            tokenize=False,
-            add_generation_prompt=True,
-        )
-
-        inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-        error: list[BaseException] = []
-        loop = asyncio.get_running_loop()
-
-        def generate() -> None:
-            try:
-                streamer = TextIteratorStreamer(
-                    tokenizer,
-                    skip_prompt=True,
-                    skip_special_tokens=True,
-                )
-                generation_config = {
-                    "max_new_tokens": max_new_tokens,
-                    "temperature": temperature,
-                    "top_p": top_p,
-                    "top_k": top_k,
-                    "repetition_penalty": repetition_penalty,
-                    "do_sample": temperature > 0,
-                    "pad_token_id": tokenizer.pad_token_id,
-                    "eos_token_id": tokenizer.eos_token_id,
-                    "streamer": streamer,
-                    **kwargs,
-                }
-
-                thread = Thread(
-                    target=lambda: model.generate(**inputs, **generation_config)
-                )
-                thread.start()
-
-                for text in streamer:
-                    loop.call_soon_threadsafe(queue.put_nowait, text)
-
-                thread.join()
-            except BaseException as e:
-                error.append(e)
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, None)
-
-        loop.run_in_executor(None, generate)
+        body: dict[str, Any] = {
+            "messages": messages,
+            "tools": tool_specs,
+            "max_new_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "repetition_penalty": repetition_penalty,
+            **kwargs,
+        }
 
         pending = ""
         in_tool_call = False
         tool_call_text = ""
 
-        while True:
-            text = await queue.get()
-            if text is None:
-                break
-            if not text:
-                continue
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("POST", f"{self.url}/complete", json=body) as response:
+                response.raise_for_status()
+                async for text in response.aiter_text():
+                    if not text:
+                        continue
 
-            if in_tool_call:
-                tool_call_text += text
-                continue
+                    if in_tool_call:
+                        tool_call_text += text
+                        continue
 
-            pending += text
+                    pending += text
 
-            opener_pos = _find_opener(pending)
-            if opener_pos is not None:
-                before = pending[:opener_pos]
-                if before:
-                    yield CompletionChunk(content=before)
-                tool_call_text = pending[opener_pos:]
-                in_tool_call = True
-                pending = ""
-                continue
+                    opener_pos = _find_opener(pending)
+                    if opener_pos is not None:
+                        before = pending[:opener_pos]
+                        if before:
+                            yield CompletionChunk(content=before)
+                        tool_call_text = pending[opener_pos:]
+                        in_tool_call = True
+                        pending = ""
+                        continue
 
-            safe, held = _split_at_potential_prefix(pending)
-            if safe:
-                yield CompletionChunk(content=safe)
-            pending = held
-
-        if error:
-            raise error[0]
+                    safe, held = _split_at_potential_prefix(pending)
+                    if safe:
+                        yield CompletionChunk(content=safe)
+                    pending = held
 
         if pending:
             yield CompletionChunk(content=pending)
@@ -218,22 +174,56 @@ class HuggingFaceModel(CompletingModel):
             yield CompletionChunk(finish_reason="stop")
 
 
+def _parse_hf_id(hf_id: str) -> tuple[str, str]:
+    """Map an HF model id to a cortexflow (family, suffix).
+
+    Strips the org (anything before the first '/'). Splits the remainder on
+    the last '-': the part before becomes family, the part after becomes
+    suffix. If there is no '-', suffix defaults to 'base'.
+    """
+    name = hf_id.split("/", 1)[-1]
+    if "-" not in name:
+        return name, "base"
+    family, _, suffix = name.rpartition("-")
+    return family, suffix
+
+
 def deploy_huggingface(model_id: str) -> HuggingFaceModel | None:
-    device = detect_device()
-
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id, torch_dtype=torch.float16
-        )
-        model.to(device)  # type: ignore
-
-        return HuggingFaceModel(model=model, tokenizer=tokenizer, device=str(device))
-    except (RepositoryNotFoundError, OSError):
+    if not model_id.startswith("hf:"):
         return None
+    hf_id = model_id[len("hf:") :]
+    family, suffix = _parse_hf_id(hf_id)
+    run_name = cortexflow.Experiment.get_instance().run_name()
+
+    already_saved = any(
+        m.family == family and m.suffix == suffix and m.run_name == run_name
+        for m in cortexflow.list_models()
+    )
+    if not already_saved:
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                snapshot_download(repo_id=hf_id, local_dir=d)
+                cortexflow.save_model(d, suffix=suffix, family=family)
+        except (RepositoryNotFoundError, OSError):
+            return None
+
+    existing = next(
+        (
+            d
+            for d in cortexflow.list_deployed_models()
+            if d.family == family and d.suffix == suffix and d.run_name == run_name
+        ),
+        None,
+    )
+    if existing is not None:
+        url = existing.url
+    else:
+        deployment = cortexflow.deploy_model(
+            HuggingFaceDeployment, family=family, suffix=suffix, run_name=run_name
+        )
+        url = deployment.url
+
+    return HuggingFaceModel(url=url, model_id=model_id)
 
 
-register_provider("", deploy_huggingface)
+register_provider("hf:", deploy_huggingface)
