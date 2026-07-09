@@ -11,7 +11,6 @@ from typing import (
     Callable,
     Sequence,
     TypeVar,
-    overload,
 )
 
 
@@ -64,6 +63,35 @@ class CompletingModel(DeployedModel):
     ) -> AsyncIterator[CompletionChunk]: ...
 
 
+@dataclass
+class GeneratedImage:
+    """One generated image: the encoded file bytes (PNG) plus the resolved
+    parameters the deployment used to produce it."""
+
+    image: bytes
+    width: int
+    height: int
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+class GeneratingModel(DeployedModel):
+    """A deployed image model. Unlike completion, generation is a single
+    request/response (no token streaming), so `generate` returns one result."""
+
+    @abc.abstractmethod
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        image: bytes | None = None,
+        steps: int | None = None,
+        guidance: float | None = None,
+        size: int = 1024,
+        seed: int | None = None,
+        **kwargs: Any,
+    ) -> GeneratedImage: ...
+
+
 _providers: list[tuple[str, Callable[[str], DeployedModel | None]]] = []
 
 T = TypeVar("T", bound=DeployedModel)
@@ -107,3 +135,14 @@ async def complete(
         **kwargs,
     ):
         yield chunk
+
+
+async def generate(
+    deployed_model: GeneratingModel,
+    prompt: str,
+    *,
+    image: bytes | None = None,
+    **kwargs: Any,
+) -> GeneratedImage:
+    """Single image-generation request to the deployed model."""
+    return await deployed_model.generate(prompt, image=image, **kwargs)

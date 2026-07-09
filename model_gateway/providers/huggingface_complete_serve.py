@@ -32,9 +32,11 @@ _RESERVED_BODY_KEYS = {
 }
 
 
-@cortexflow.model_deployment(num_gpus=1, num_replicas=1)
 @serve.ingress(_app)
-class HuggingFaceDeployment:
+class HuggingFaceCompletingDeployment:
+    num_gpus = 1
+    num_replicas = 1
+
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         path = cortexflow.load_model(family, suffix, run_name)
         self._device = detect_device()
@@ -42,7 +44,7 @@ class HuggingFaceDeployment:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
         self._model = AutoModelForCausalLM.from_pretrained(
-            path, torch_dtype=torch.float16
+            str(path), torch_dtype=torch.float16
         )
         self._model.to(self._device)  # type: ignore
 
@@ -89,7 +91,9 @@ class HuggingFaceDeployment:
                     **extra,
                 }
                 thread = Thread(
-                    target=lambda: self._model.generate(**inputs, **generation_config)
+                    target=lambda: self._model.generate(  # type: ignore
+                        **inputs, **generation_config
+                    )
                 )
                 thread.start()
                 for text in streamer:

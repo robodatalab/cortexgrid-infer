@@ -1,4 +1,4 @@
-"""Tests for model_gateway.providers.huggingface."""
+"""Tests for model_gateway.providers.huggingface_complete."""
 
 from __future__ import annotations
 
@@ -7,10 +7,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest import mock
 
-from model_gateway.providers.huggingface import (
-    HuggingFaceModel,
+from model_gateway.providers.huggingface_complete import (
+    HuggingFaceCompletingModel,
     _parse_hf_id,
     deploy_huggingface,
+)
+from model_gateway.providers.huggingface_complete_serve import (
+    HuggingFaceCompletingDeployment,
 )
 
 
@@ -33,7 +36,7 @@ class TestParseHFId(unittest.TestCase):
         self.assertEqual(_parse_hf_id("a/b-c-d-e"), ("b-c-d", "e"))
 
 
-# --- HTTP streaming fakes for HuggingFaceModel.complete ---
+# --- HTTP streaming fakes for HuggingFaceCompletingModel.complete ---
 
 
 class _FakeResponse:
@@ -71,9 +74,7 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args: Any) -> None:
         pass
 
-    def stream(
-        self, method: str, url: str, json: dict[str, Any]
-    ) -> _FakeStreamCtx:
+    def stream(self, method: str, url: str, json: dict[str, Any]) -> _FakeStreamCtx:
         type(self).captured = {"method": method, "url": url, "json": json}
         return _FakeStreamCtx(self._chunks)
 
@@ -82,14 +83,12 @@ def _patch_httpx_client(chunks: list[str]):
     def factory(*_a: Any, **_kw: Any) -> _FakeAsyncClient:
         return _FakeAsyncClient(chunks)
 
-    return mock.patch(
-        "model_gateway.providers.huggingface.httpx.AsyncClient", factory
-    )
+    return mock.patch("model_gateway.providers.huggingface_complete.httpx.AsyncClient", factory)
 
 
-class TestHuggingFaceModelComplete(unittest.IsolatedAsyncioTestCase):
+class TestHuggingFaceCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
     async def test_streams_plain_text(self):
-        model = HuggingFaceModel(url="http://x/r/f/s/r", model_id="hf:test")
+        model = HuggingFaceCompletingModel(url="http://x/r/f/s/r", model_id="hf:test")
         with _patch_httpx_client(["hello", " ", "world"]):
             out = [
                 c
@@ -101,7 +100,9 @@ class TestHuggingFaceModelComplete(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(out[-1].finish_reason, "stop")
 
     async def test_posts_to_complete_endpoint_with_params(self):
-        model = HuggingFaceModel(url="http://h:30000/r/F/S/R", model_id="hf:test")
+        model = HuggingFaceCompletingModel(
+            url="http://h:30000/r/F/S/R", model_id="hf:test"
+        )
         with _patch_httpx_client(["ok"]):
             _ = [
                 c
@@ -130,7 +131,7 @@ class TestHuggingFaceModelComplete(unittest.IsolatedAsyncioTestCase):
             '{"name": "add", "arguments": {"a": 2, "b": 3}}',
             "</tool_call>",
         ]
-        model = HuggingFaceModel(url="http://x/r/f/s/r", model_id="hf:test")
+        model = HuggingFaceCompletingModel(url="http://x/r/f/s/r", model_id="hf:test")
         with _patch_httpx_client(chunks):
             out = [
                 c
@@ -180,12 +181,12 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         self.assertIsNone(deploy_huggingface("openai:gpt-4"))
         self.assertIsNone(deploy_huggingface("Qwen/Qwen2-2.5B-Instruct"))
 
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.deploy_model")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.list_deployed_models")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.list_models")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface.snapshot_download")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
     def test_uploads_and_deploys_when_absent(
         self,
         mock_snapshot: mock.Mock,
@@ -199,7 +200,9 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         mock_list_models.return_value = []
         mock_list_deployed.return_value = []
         mock_deploy.return_value = _FakeDeployment(
-            "Qwen2-2.5B", "Instruct", "run-1",
+            "Qwen2-2.5B",
+            "Instruct",
+            "run-1",
             "http://h/r/Qwen2-2.5B/Instruct/run-1",
         )
 
@@ -217,18 +220,27 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         mock_save.assert_called_once()
         self.assertEqual(mock_save.call_args.kwargs["family"], "Qwen2-2.5B")
         self.assertEqual(mock_save.call_args.kwargs["suffix"], "Instruct")
+        self.assertIs(
+            mock_save.call_args.args[1], HuggingFaceCompletingDeployment
+        )
         mock_deploy.assert_called_once()
         self.assertEqual(
             mock_deploy.call_args.kwargs,
-            {"family": "Qwen2-2.5B", "suffix": "Instruct", "run_name": "run-1"},
+            {
+                "family": "Qwen2-2.5B",
+                "suffix": "Instruct",
+                "run_name": "run-1",
+                "wait": True,
+                "timeout": None,
+            },
         )
 
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.deploy_model")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.list_deployed_models")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.list_models")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface.snapshot_download")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
     def test_skips_upload_when_already_saved(
         self,
         mock_snapshot: mock.Mock,
@@ -244,7 +256,9 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         ]
         mock_list_deployed.return_value = []
         mock_deploy.return_value = _FakeDeployment(
-            "Qwen2-2.5B", "Instruct", "run-1",
+            "Qwen2-2.5B",
+            "Instruct",
+            "run-1",
             "http://h/r/Qwen2-2.5B/Instruct/run-1",
         )
 
@@ -254,12 +268,12 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         mock_save.assert_not_called()
         mock_deploy.assert_called_once()
 
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.deploy_model")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.list_deployed_models")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.list_models")
-    @mock.patch("model_gateway.providers.huggingface.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface.snapshot_download")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
     def test_skips_deploy_when_already_deployed(
         self,
         mock_snapshot: mock.Mock,
@@ -274,9 +288,7 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
             _FakeSavedModel("Qwen2-2.5B", "Instruct", "run-1")
         ]
         mock_list_deployed.return_value = [
-            _FakeDeployment(
-                "Qwen2-2.5B", "Instruct", "run-1", "http://existing/url"
-            )
+            _FakeDeployment("Qwen2-2.5B", "Instruct", "run-1", "http://existing/url")
         ]
 
         model = deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")

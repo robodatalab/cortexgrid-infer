@@ -24,7 +24,9 @@ from model_gateway.core import (
     CompletionChunk,
     register_provider,
 )
-from model_gateway.providers.huggingface_serve import HuggingFaceDeployment
+from model_gateway.providers.huggingface_complete_serve import (
+    HuggingFaceCompletingDeployment,
+)
 from model_gateway.utils import build_tool_map, normalize_tools
 
 
@@ -94,7 +96,7 @@ def parse_tool_calls(
 
 
 @dataclass
-class HuggingFaceModel(CompletingModel):
+class HuggingFaceCompletingModel(CompletingModel):
     url: str
     model_id: str
 
@@ -132,7 +134,9 @@ class HuggingFaceModel(CompletingModel):
         tool_call_text = ""
 
         async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", f"{self.url}/complete", json=body) as response:
+            async with client.stream(
+                "POST", f"{self.url}/complete", json=body
+            ) as response:
                 response.raise_for_status()
                 async for text in response.aiter_text():
                     if not text:
@@ -188,7 +192,7 @@ def _parse_hf_id(hf_id: str) -> tuple[str, str]:
     return family, suffix
 
 
-def deploy_huggingface(model_id: str) -> HuggingFaceModel | None:
+def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
     if not model_id.startswith("hf:"):
         return None
     hf_id = model_id[len("hf:") :]
@@ -203,7 +207,9 @@ def deploy_huggingface(model_id: str) -> HuggingFaceModel | None:
         try:
             with tempfile.TemporaryDirectory() as d:
                 snapshot_download(repo_id=hf_id, local_dir=d)
-                cortexflow.save_model(d, suffix=suffix, family=family)
+                cortexflow.save_model(
+                    d, HuggingFaceCompletingDeployment, family=family, suffix=suffix
+                )
         except (RepositoryNotFoundError, OSError):
             return None
 
@@ -219,11 +225,15 @@ def deploy_huggingface(model_id: str) -> HuggingFaceModel | None:
         url = existing.url
     else:
         deployment = cortexflow.deploy_model(
-            HuggingFaceDeployment, family=family, suffix=suffix, run_name=run_name
+            family=family,
+            suffix=suffix,
+            run_name=run_name,
+            wait=True,
+            timeout=None,
         )
         url = deployment.url
 
-    return HuggingFaceModel(url=url, model_id=model_id)
+    return HuggingFaceCompletingModel(url=url, model_id=model_id)
 
 
 register_provider("hf:", deploy_huggingface)
