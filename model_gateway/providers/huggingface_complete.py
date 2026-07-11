@@ -8,13 +8,13 @@ from dataclasses import dataclass
 from functools import partial
 import itertools
 import json
+import os
 import re
 from typing import Any, Callable, Sequence
 
 import cortexflow
 import httpx
 from huggingface_hub import snapshot_download
-from huggingface_hub.errors import RepositoryNotFoundError
 
 from model_gateway.core import (
     CompletingModel,
@@ -22,7 +22,10 @@ from model_gateway.core import (
     Tool,
     ToolCall,
     CompletionChunk,
+    register_deleter,
     register_provider,
+    register_status_provider,
+    register_uploader,
 )
 from model_gateway.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
@@ -99,10 +102,23 @@ def parse_tool_calls(
 class HuggingFaceCompletingModel(CompletingModel):
     url: str
     model_id: str
+    # cortexflow deployment identity, carried so the owner can tear it down
+    # without re-deriving it from the active experiment at shutdown.
+    family: str = ""
+    suffix: str = ""
+    run_name: str = ""
 
     @property
     def name(self) -> str:
         return self.model_id
+
+    def undeploy(self) -> None:
+        """Tear down the Ray Serve app backing this model (frees its GPU).
+
+        The weights + bundle stay in the cortexflow registry, so a later
+        deploy re-schedules the app without re-uploading."""
+        if self.family and self.suffix and self.run_name:
+            cortexflow.undeploy_model(self.family, self.suffix, self.run_name)
 
     async def complete(
         self,
@@ -192,6 +208,50 @@ def _parse_hf_id(hf_id: str) -> tuple[str, str]:
     return family, suffix
 
 
+def _ingest_huggingface(
+    hf_id: str, family: str, suffix: str, token: str | None
+) -> None:
+    """Download the HF weights and register them in the cortexflow registry.
+
+    Submitted to the cluster via ``cortexflow.remote`` (see `upload_huggingface`),
+    so the weights travel HuggingFace -> cluster node -> registry and never transit
+    the client. ``save_model`` scopes the version to the ambient Experiment, which
+    the remote job inherits from the submitter, so it lands under the same run the
+    deploy later reads."""
+    with tempfile.TemporaryDirectory() as d:
+        snapshot_download(repo_id=hf_id, local_dir=d, token=token)
+        cortexflow.save_model(
+            d, HuggingFaceCompletingDeployment, family=family, suffix=suffix
+        )
+
+
+def upload_huggingface(model_id: str) -> str | None:
+    """Start ingesting *model_id*'s weights into the registry, on the cluster.
+
+    Returns the id of the background ``cortexflow.remote`` job, or None if the
+    model is already registered (phase `uploading`/`ready`) so there is nothing to
+    submit. Poll progress via ``deployment_status(model_id)``; deploy once `ready`."""
+    if not model_id.startswith("hf:"):
+        return None
+    hf_id = model_id[len("hf:") :]
+    family, suffix = _parse_hf_id(hf_id)
+    run_name = cortexflow.Experiment.get_instance().run_name()
+
+    status = cortexflow.model_registry_status(family, suffix, run_name)
+    if status is not None and status.phase in ("uploading", "ready"):
+        return None
+
+    return cortexflow.remote(
+        _ingest_huggingface,
+        hf_id,
+        family,
+        suffix,
+        os.environ.get("HF_TOKEN"),
+        num_gpus=0,
+        num_cpus=2,
+    )
+
+
 def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
     if not model_id.startswith("hf:"):
         return None
@@ -199,19 +259,13 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
     family, suffix = _parse_hf_id(hf_id)
     run_name = cortexflow.Experiment.get_instance().run_name()
 
-    already_saved = any(
-        m.family == family and m.suffix == suffix and m.run_name == run_name
-        for m in cortexflow.list_models()
-    )
-    if not already_saved:
-        try:
-            with tempfile.TemporaryDirectory() as d:
-                snapshot_download(repo_id=hf_id, local_dir=d)
-                cortexflow.save_model(
-                    d, HuggingFaceCompletingDeployment, family=family, suffix=suffix
-                )
-        except (RepositoryNotFoundError, OSError):
-            return None
+    status = cortexflow.model_registry_status(family, suffix, run_name)
+    if status is None or status.phase != "ready":
+        phase = None if status is None else status.phase
+        raise RuntimeError(
+            f"Model '{model_id}' is not registry-ready (phase={phase}); call "
+            f"upload_model('{model_id}') and wait for phase 'ready' before deploying."
+        )
 
     existing = next(
         (
@@ -233,7 +287,48 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
         )
         url = deployment.url
 
-    return HuggingFaceCompletingModel(url=url, model_id=model_id)
+    return HuggingFaceCompletingModel(
+        url=url,
+        model_id=model_id,
+        family=family,
+        suffix=suffix,
+        run_name=run_name,
+    )
+
+
+def hf_deployment_status(model_id: str) -> Any:
+    """Live phase of the deployment for *model_id*, delegated to cortexflow.
+
+    Read-only - safe to poll from a status endpoint while a deploy is in flight.
+    Resolves the same (family, suffix, run_name) identity `deploy` uses. Reports
+    the serving lifecycle (`cortexflow.model_serving_status`) once a Serve app
+    exists; before that - while the weights are still uploading to the registry -
+    it falls back to the registry lifecycle (`cortexflow.model_registry_status`),
+    so a poll stays meaningful during weight staging / scheduling too."""
+    if not model_id.startswith("hf:"):
+        return None
+    family, suffix = _parse_hf_id(model_id[len("hf:") :])
+    run_name = cortexflow.Experiment.get_instance().run_name()
+    serving = cortexflow.model_serving_status(family, suffix, run_name)
+    if serving.phase != "not_deployed":
+        return serving
+    return cortexflow.model_registry_status(family, suffix, run_name)
+
+
+def delete_huggingface(model_id: str) -> None:
+    """Undeploy (if running) and delete this model's weights + serve bundle.
+
+    Idempotent: safe whether or not the model is deployed or registered, so it is
+    the inverse of `upload_huggingface` + `deploy_huggingface` for cleanup."""
+    if not model_id.startswith("hf:"):
+        return
+    family, suffix = _parse_hf_id(model_id[len("hf:") :])
+    run_name = cortexflow.Experiment.get_instance().run_name()
+    cortexflow.undeploy_model(family, suffix, run_name)
+    cortexflow.delete_model(family, suffix, run_name)
 
 
 register_provider("hf:", deploy_huggingface)
+register_status_provider("hf:", hf_deployment_status)
+register_uploader("hf:", upload_huggingface)
+register_deleter("hf:", delete_huggingface)

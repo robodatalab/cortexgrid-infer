@@ -9,18 +9,28 @@ from model_gateway.core import (
     ToolCall,
     ToolSpec,
     complete,
+    delete_model,
     deploy_model,
+    deployment_status,
     generate,
+    register_deleter,
     register_provider,
+    register_status_provider,
+    register_uploader,
+    upload_model,
 )
 from model_gateway.device import detect_device
 from model_gateway.providers.anthropic import deploy_anthropic, AnthropicModel
 from model_gateway.providers.huggingface_complete import (
+    delete_huggingface,
     deploy_huggingface,
+    upload_huggingface,
     HuggingFaceCompletingModel,
 )
 from model_gateway.providers.huggingface_image import (
+    delete_huggingface_image,
     deploy_huggingface_image,
+    upload_huggingface_image,
     HuggingFaceImageModel,
 )
 
@@ -36,13 +46,23 @@ __all__ = [
     "ToolSpec",
     "complete",
     "deploy_model",
+    "deployment_status",
+    "upload_model",
+    "delete_model",
     "generate",
     "detect_device",
     "register_provider",
+    "register_status_provider",
+    "register_uploader",
+    "register_deleter",
     "deploy_anthropic",
     "AnthropicModel",
     "deploy_huggingface",
+    "upload_huggingface",
+    "delete_huggingface",
     "HuggingFaceCompletingModel",
     "deploy_huggingface_image",
+    "upload_huggingface_image",
+    "delete_huggingface_image",
     "HuggingFaceImageModel",
 ]

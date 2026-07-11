@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import AsyncIterator
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 from model_gateway.providers.huggingface_complete import (
     HuggingFaceCompletingModel,
     _parse_hf_id,
+    _ingest_huggingface,
+    delete_huggingface,
     deploy_huggingface,
+    upload_huggingface,
 )
 from model_gateway.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
@@ -153,13 +157,6 @@ class TestHuggingFaceCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
 # --- deploy_huggingface flow ---
 
 
-class _FakeSavedModel:
-    def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        self.family = family
-        self.suffix = suffix
-        self.run_name = run_name
-
-
 class _FakeDeployment:
     def __init__(self, family: str, suffix: str, run_name: str, url: str) -> None:
         self.family = family
@@ -183,45 +180,33 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
 
     @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
     @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_models")
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        create=True,
+    )
     @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
-    def test_uploads_and_deploys_when_absent(
+    def test_deploys_when_registry_ready(
         self,
-        mock_snapshot: mock.Mock,
         mock_experiment: mock.Mock,
-        mock_list_models: mock.Mock,
-        mock_save: mock.Mock,
+        mock_registry: mock.Mock,
         mock_list_deployed: mock.Mock,
         mock_deploy: mock.Mock,
     ):
         mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_list_models.return_value = []
+        mock_registry.return_value = SimpleNamespace(phase="ready")
         mock_list_deployed.return_value = []
         mock_deploy.return_value = _FakeDeployment(
-            "Qwen2-2.5B",
-            "Instruct",
-            "run-1",
-            "http://h/r/Qwen2-2.5B/Instruct/run-1",
+            "Qwen2-2.5B", "Instruct", "run-1", "http://h/r/Qwen2-2.5B/Instruct/run-1"
         )
 
         model = deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
 
-        self.assertIsNotNone(model)
         assert model is not None
         self.assertEqual(model.url, "http://h/r/Qwen2-2.5B/Instruct/run-1")
         self.assertEqual(model.model_id, "hf:Qwen/Qwen2-2.5B-Instruct")
-
-        mock_snapshot.assert_called_once()
         self.assertEqual(
-            mock_snapshot.call_args.kwargs["repo_id"], "Qwen/Qwen2-2.5B-Instruct"
-        )
-        mock_save.assert_called_once()
-        self.assertEqual(mock_save.call_args.kwargs["family"], "Qwen2-2.5B")
-        self.assertEqual(mock_save.call_args.kwargs["suffix"], "Instruct")
-        self.assertIs(
-            mock_save.call_args.args[1], HuggingFaceCompletingDeployment
+            (model.family, model.suffix, model.run_name),
+            ("Qwen2-2.5B", "Instruct", "run-1"),
         )
         mock_deploy.assert_called_once()
         self.assertEqual(
@@ -237,56 +222,20 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
 
     @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
     @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_models")
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        create=True,
+    )
     @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
-    def test_skips_upload_when_already_saved(
+    def test_reuses_existing_deployment(
         self,
-        mock_snapshot: mock.Mock,
         mock_experiment: mock.Mock,
-        mock_list_models: mock.Mock,
-        mock_save: mock.Mock,
+        mock_registry: mock.Mock,
         mock_list_deployed: mock.Mock,
         mock_deploy: mock.Mock,
     ):
         mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_list_models.return_value = [
-            _FakeSavedModel("Qwen2-2.5B", "Instruct", "run-1")
-        ]
-        mock_list_deployed.return_value = []
-        mock_deploy.return_value = _FakeDeployment(
-            "Qwen2-2.5B",
-            "Instruct",
-            "run-1",
-            "http://h/r/Qwen2-2.5B/Instruct/run-1",
-        )
-
-        deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
-
-        mock_snapshot.assert_not_called()
-        mock_save.assert_not_called()
-        mock_deploy.assert_called_once()
-
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_models")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
-    def test_skips_deploy_when_already_deployed(
-        self,
-        mock_snapshot: mock.Mock,
-        mock_experiment: mock.Mock,
-        mock_list_models: mock.Mock,
-        mock_save: mock.Mock,
-        mock_list_deployed: mock.Mock,
-        mock_deploy: mock.Mock,
-    ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_list_models.return_value = [
-            _FakeSavedModel("Qwen2-2.5B", "Instruct", "run-1")
-        ]
+        mock_registry.return_value = SimpleNamespace(phase="ready")
         mock_list_deployed.return_value = [
             _FakeDeployment("Qwen2-2.5B", "Instruct", "run-1", "http://existing/url")
         ]
@@ -296,6 +245,169 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         assert model is not None
         self.assertEqual(model.url, "http://existing/url")
         mock_deploy.assert_not_called()
+
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    def test_raises_when_not_registry_ready(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_deploy: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        for status in (None, SimpleNamespace(phase="uploading")):
+            mock_registry.return_value = status
+            with self.assertRaises(RuntimeError):
+                deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
+        mock_deploy.assert_not_called()
+
+
+class TestUploadHuggingFace(unittest.TestCase):
+    def test_returns_none_for_non_hf_prefix(self):
+        self.assertIsNone(upload_huggingface("openai:gpt-4"))
+
+    @mock.patch.dict("os.environ", {"HF_TOKEN": "tok"})
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.remote", create=True
+    )
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    def test_submits_remote_ingest_when_absent(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_registry.return_value = None
+        mock_remote.return_value = "job-1"
+
+        job = upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
+
+        self.assertEqual(job, "job-1")
+        mock_remote.assert_called_once()
+        args = mock_remote.call_args.args
+        self.assertIs(args[0], _ingest_huggingface)
+        self.assertEqual(
+            args[1:], ("Qwen/Qwen2-2.5B-Instruct", "Qwen2-2.5B", "Instruct", "tok")
+        )
+        self.assertEqual(
+            mock_remote.call_args.kwargs, {"num_gpus": 0, "num_cpus": 2}
+        )
+
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.remote", create=True
+    )
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    def test_skips_when_already_registered(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        for phase in ("uploading", "ready"):
+            mock_registry.return_value = SimpleNamespace(phase=phase)
+            self.assertIsNone(upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct"))
+        mock_remote.assert_not_called()
+
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
+    def test_ingest_downloads_and_saves(
+        self, mock_snapshot: mock.Mock, mock_save: mock.Mock
+    ):
+        _ingest_huggingface(
+            "Qwen/Qwen2-2.5B-Instruct", "Qwen2-2.5B", "Instruct", "tok"
+        )
+        mock_snapshot.assert_called_once()
+        self.assertEqual(
+            mock_snapshot.call_args.kwargs["repo_id"], "Qwen/Qwen2-2.5B-Instruct"
+        )
+        self.assertEqual(mock_snapshot.call_args.kwargs["token"], "tok")
+        mock_save.assert_called_once()
+        self.assertIs(mock_save.call_args.args[1], HuggingFaceCompletingDeployment)
+        self.assertEqual(
+            mock_save.call_args.kwargs, {"family": "Qwen2-2.5B", "suffix": "Instruct"}
+        )
+
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.remote", create=True
+    )
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    def test_core_dispatch_routes_hf(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+    ):
+        import model_gateway
+
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_registry.return_value = None
+        mock_remote.return_value = "job-9"
+        self.assertEqual(
+            model_gateway.upload_model("hf:Qwen/Qwen2-2.5B-Instruct"), "job-9"
+        )
+
+    def test_core_dispatch_none_for_unhandled_prefix(self):
+        import model_gateway
+
+        self.assertIsNone(model_gateway.upload_model("openai:gpt-4"))
+
+
+class TestDeleteHuggingFace(unittest.TestCase):
+    def test_noop_for_non_hf_prefix(self):
+        # No cortexflow calls patched: a non-match must not touch the platform.
+        self.assertIsNone(delete_huggingface("openai:gpt-4"))
+
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    def test_undeploys_then_deletes(
+        self,
+        mock_experiment: mock.Mock,
+        mock_undeploy: mock.Mock,
+        mock_delete: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        delete_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
+        mock_undeploy.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
+        mock_delete.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
+
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    def test_core_dispatch_routes_hf(
+        self,
+        mock_experiment: mock.Mock,
+        mock_undeploy: mock.Mock,
+        mock_delete: mock.Mock,
+    ):
+        import model_gateway
+
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        model_gateway.delete_model("hf:Qwen/Qwen2-2.5B-Instruct")
+        mock_delete.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
+
+    def test_core_dispatch_noop_for_unhandled_prefix(self):
+        import model_gateway
+
+        self.assertIsNone(model_gateway.delete_model("openai:gpt-4"))
 
 
 if __name__ == "__main__":

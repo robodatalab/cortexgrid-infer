@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import base64
 import unittest
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 from model_gateway.providers.huggingface_image import (
     HuggingFaceImageModel,
+    _ingest_huggingface_image,
+    delete_huggingface_image,
     deploy_huggingface_image,
+    upload_huggingface_image,
 )
 from model_gateway.providers.huggingface_image_serve import (
     HuggingFaceImageDeployment,
@@ -96,13 +100,6 @@ class TestHuggingFaceImageModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(base64.b64decode(sent), b"reference-png")
 
 
-class _FakeSavedModel:
-    def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        self.family = family
-        self.suffix = suffix
-        self.run_name = run_name
-
-
 class _FakeDeployment:
     def __init__(self, family: str, suffix: str, run_name: str, url: str) -> None:
         self.family = family
@@ -128,21 +125,20 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
     @mock.patch(
         "model_gateway.providers.huggingface_image.cortexflow.list_deployed_models"
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.list_models")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
     @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface_image.snapshot_download")
-    def test_uploads_and_deploys_when_absent(
+    def test_deploys_when_registry_ready(
         self,
-        mock_snapshot: mock.Mock,
         mock_experiment: mock.Mock,
-        mock_list_models: mock.Mock,
-        mock_save: mock.Mock,
+        mock_registry: mock.Mock,
         mock_list_deployed: mock.Mock,
         mock_deploy: mock.Mock,
     ):
         mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_list_models.return_value = []
+        mock_registry.return_value = SimpleNamespace(phase="ready")
         mock_list_deployed.return_value = []
         mock_deploy.return_value = _FakeDeployment(
             "FLUX.2-klein-base", "4B", "run-1",
@@ -153,18 +149,12 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
             "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
         )
 
-        self.assertIsNotNone(model)
         assert model is not None
         self.assertEqual(model.url, "http://h/r/FLUX.2-klein-base/4B/run-1")
-        mock_snapshot.assert_called_once()
         self.assertEqual(
-            mock_snapshot.call_args.kwargs["repo_id"],
-            "black-forest-labs/FLUX.2-klein-base-4B",
+            (model.family, model.suffix, model.run_name),
+            ("FLUX.2-klein-base", "4B", "run-1"),
         )
-        mock_save.assert_called_once()
-        self.assertEqual(mock_save.call_args.kwargs["family"], "FLUX.2-klein-base")
-        self.assertEqual(mock_save.call_args.kwargs["suffix"], "4B")
-        self.assertIs(mock_save.call_args.args[1], HuggingFaceImageDeployment)
         self.assertEqual(
             mock_deploy.call_args.kwargs,
             {
@@ -180,23 +170,20 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
     @mock.patch(
         "model_gateway.providers.huggingface_image.cortexflow.list_deployed_models"
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.save_model")
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.list_models")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
     @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
-    @mock.patch("model_gateway.providers.huggingface_image.snapshot_download")
     def test_reuses_existing_deployment(
         self,
-        mock_snapshot: mock.Mock,
         mock_experiment: mock.Mock,
-        mock_list_models: mock.Mock,
-        mock_save: mock.Mock,
+        mock_registry: mock.Mock,
         mock_list_deployed: mock.Mock,
         mock_deploy: mock.Mock,
     ):
         mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1")
-        ]
+        mock_registry.return_value = SimpleNamespace(phase="ready")
         mock_list_deployed.return_value = [
             _FakeDeployment("FLUX.2-klein-base", "4B", "run-1", "http://existing/url")
         ]
@@ -207,9 +194,269 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
 
         assert model is not None
         self.assertEqual(model.url, "http://existing/url")
-        mock_snapshot.assert_not_called()
-        mock_save.assert_not_called()
         mock_deploy.assert_not_called()
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.deploy_model")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_raises_when_not_registry_ready(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_deploy: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        for status in (None, SimpleNamespace(phase="uploading")):
+            mock_registry.return_value = status
+            with self.assertRaises(RuntimeError):
+                deploy_huggingface_image(
+                    "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
+                )
+        mock_deploy.assert_not_called()
+
+
+class TestUploadHuggingFaceImage(unittest.TestCase):
+    def test_returns_none_for_non_hf_image_prefix(self):
+        self.assertIsNone(upload_huggingface_image("hf:Qwen/Qwen2-Instruct"))
+
+    @mock.patch.dict("os.environ", {"HF_TOKEN": "tok"})
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.remote", create=True)
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_submits_remote_ingest_when_absent(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_registry.return_value = None
+        mock_remote.return_value = "job-1"
+
+        job = upload_huggingface_image(
+            "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
+        )
+
+        self.assertEqual(job, "job-1")
+        mock_remote.assert_called_once()
+        args = mock_remote.call_args.args
+        self.assertIs(args[0], _ingest_huggingface_image)
+        self.assertEqual(
+            args[1:],
+            ("black-forest-labs/FLUX.2-klein-base-4B", "FLUX.2-klein-base", "4B", "tok"),
+        )
+        self.assertEqual(mock_remote.call_args.kwargs, {"num_gpus": 0, "num_cpus": 2})
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.remote", create=True)
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_skips_when_already_registered(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        for phase in ("uploading", "ready"):
+            mock_registry.return_value = SimpleNamespace(phase=phase)
+            self.assertIsNone(
+                upload_huggingface_image(
+                    "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
+                )
+            )
+        mock_remote.assert_not_called()
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.save_model")
+    @mock.patch("model_gateway.providers.huggingface_image.snapshot_download")
+    def test_ingest_downloads_and_saves(
+        self, mock_snapshot: mock.Mock, mock_save: mock.Mock
+    ):
+        _ingest_huggingface_image(
+            "black-forest-labs/FLUX.2-klein-base-4B", "FLUX.2-klein-base", "4B", "tok"
+        )
+        mock_snapshot.assert_called_once()
+        self.assertEqual(
+            mock_snapshot.call_args.kwargs["repo_id"],
+            "black-forest-labs/FLUX.2-klein-base-4B",
+        )
+        self.assertEqual(mock_snapshot.call_args.kwargs["token"], "tok")
+        self.assertIn("ignore_patterns", mock_snapshot.call_args.kwargs)
+        mock_save.assert_called_once()
+        self.assertIs(mock_save.call_args.args[1], HuggingFaceImageDeployment)
+        self.assertEqual(
+            mock_save.call_args.kwargs, {"family": "FLUX.2-klein-base", "suffix": "4B"}
+        )
+
+
+class TestUndeploy(unittest.TestCase):
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
+    def test_undeploy_tears_down_serve_app(self, mock_undeploy: mock.Mock):
+        model = HuggingFaceImageModel(
+            url="http://h/r/F/S/R", model_id="hf-image:x",
+            family="FLUX.2-klein-base", suffix="4B", run_name="run-1",
+        )
+        model.undeploy()
+        mock_undeploy.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
+    def test_undeploy_is_noop_without_identifiers(self, mock_undeploy: mock.Mock):
+        HuggingFaceImageModel(url="u", model_id="hf-image:x").undeploy()
+        mock_undeploy.assert_not_called()
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.deploy_model")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.list_deployed_models"
+    )
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_deployed_model_carries_identifiers(
+        self,
+        mock_experiment: mock.Mock,
+        mock_registry: mock.Mock,
+        mock_list_deployed: mock.Mock,
+        mock_deploy: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_registry.return_value = SimpleNamespace(phase="ready")
+        mock_list_deployed.return_value = [
+            _FakeDeployment("FLUX.2-klein-base", "4B", "run-1", "http://existing/url")
+        ]
+
+        model = deploy_huggingface_image(
+            "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
+        )
+
+        assert model is not None
+        self.assertEqual(
+            (model.family, model.suffix, model.run_name),
+            ("FLUX.2-klein-base", "4B", "run-1"),
+        )
+
+
+class TestImageDeploymentStatus(unittest.TestCase):
+    def test_returns_none_for_non_hf_image_prefix(self):
+        from model_gateway.providers.huggingface_image import image_deployment_status
+        self.assertIsNone(image_deployment_status("hf:Qwen/Qwen2-Instruct"))
+
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_serving_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_reports_serving_status_once_deployed(
+        self,
+        mock_experiment: mock.Mock,
+        mock_serving: mock.Mock,
+        mock_registry: mock.Mock,
+    ):
+        from model_gateway.providers.huggingface_image import image_deployment_status
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_serving.return_value = SimpleNamespace(phase="running")
+        result = image_deployment_status(
+            "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
+        )
+        self.assertEqual(result.phase, "running")
+        mock_serving.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+        mock_registry.assert_not_called()
+
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_serving_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_falls_back_to_registry_status_before_deploy(
+        self,
+        mock_experiment: mock.Mock,
+        mock_serving: mock.Mock,
+        mock_registry: mock.Mock,
+    ):
+        from model_gateway.providers.huggingface_image import image_deployment_status
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_serving.return_value = SimpleNamespace(phase="not_deployed")
+        mock_registry.return_value = SimpleNamespace(phase="uploading")
+        result = image_deployment_status(
+            "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
+        )
+        self.assertEqual(result.phase, "uploading")
+        mock_registry.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        create=True,
+    )
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexflow.model_serving_status",
+        create=True,
+    )
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_core_dispatch_routes_hf_image(
+        self,
+        mock_experiment: mock.Mock,
+        mock_serving: mock.Mock,
+        mock_registry: mock.Mock,
+    ):
+        import model_gateway
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_serving.return_value = SimpleNamespace(phase="running")
+        result = model_gateway.deployment_status("hf-image:org/Model-4B")
+        self.assertEqual(result.phase, "running")
+
+    def test_core_dispatch_none_for_unhandled_prefix(self):
+        import model_gateway
+        self.assertIsNone(model_gateway.deployment_status("openai:gpt-4"))
+
+
+class TestDeleteHuggingFaceImage(unittest.TestCase):
+    def test_noop_for_non_hf_image_prefix(self):
+        self.assertIsNone(delete_huggingface_image("hf:Qwen/Qwen2-Instruct"))
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_undeploys_then_deletes(
+        self,
+        mock_experiment: mock.Mock,
+        mock_undeploy: mock.Mock,
+        mock_delete: mock.Mock,
+    ):
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        delete_huggingface_image("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
+        mock_undeploy.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+        mock_delete.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    def test_core_dispatch_routes_hf_image(
+        self,
+        mock_experiment: mock.Mock,
+        mock_undeploy: mock.Mock,
+        mock_delete: mock.Mock,
+    ):
+        import model_gateway
+        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        model_gateway.delete_model("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
+        mock_delete.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
 
 
 if __name__ == "__main__":
