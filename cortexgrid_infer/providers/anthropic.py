@@ -7,7 +7,7 @@ from functools import partial
 from collections.abc import AsyncIterator
 from typing import Any, Sequence
 
-from model_gateway.core import (
+from cortexgrid_infer.core import (
     CompletingModel,
     Message,
     Tool,
@@ -16,7 +16,7 @@ from model_gateway.core import (
     CompletionChunk,
     register_provider,
 )
-from model_gateway.utils import build_tool_map, normalize_tools
+from cortexgrid_infer.utils import build_tool_map, normalize_tools
 
 from anthropic import AsyncAnthropic, Anthropic, NotFoundError
 from dotenv import load_dotenv

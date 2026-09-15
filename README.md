@@ -1,4 +1,4 @@
-# model-gateway
+# cortexgrid-infer
 
 One API to run inference across providers — hosted APIs (Anthropic) and models you
 deploy yourself on the [cortexgrid](https://github.com/robodatalab/cortexgrid)
@@ -45,7 +45,7 @@ scoped to it.
 ```python
 import asyncio, time
 import cortexgrid
-import model_gateway as mg
+import cortexgrid_infer as mg
 
 cortexgrid.init(experiment="img-gen")   # one call per process; starts an MLflow run
 mid = "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
@@ -100,7 +100,7 @@ async for chunk in mg.complete(model, messages):
 
 ## API
 
-All exported from `model_gateway.*`. Each generic entry point routes by model-id
+All exported from `cortexgrid_infer.*`. Each generic entry point routes by model-id
 prefix to the provider that registered for it.
 
 | Function | Purpose |

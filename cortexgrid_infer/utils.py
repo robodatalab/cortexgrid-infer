@@ -8,7 +8,7 @@ import os
 import shutil
 from typing import Any, Callable, Sequence, get_type_hints
 
-from model_gateway.core import Tool, ToolSpec
+from cortexgrid_infer.core import Tool, ToolSpec
 
 
 def get_underlying_func(func: Callable | partial) -> Callable:

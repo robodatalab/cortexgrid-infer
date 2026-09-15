@@ -1,10 +1,10 @@
-"""Tests for model_gateway.device."""
+"""Tests for cortexgrid_infer.device."""
 
 import unittest
 
 import torch
 
-from model_gateway.device import detect_device
+from cortexgrid_infer.device import detect_device
 
 
 class TestDetectDevice(unittest.TestCase):

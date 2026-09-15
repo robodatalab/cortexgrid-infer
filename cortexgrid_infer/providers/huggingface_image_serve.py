@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from PIL import Image, ImageOps
 import torch
 
-from model_gateway.device import detect_device
+from cortexgrid_infer.device import detect_device
 
 
 _app = FastAPI()

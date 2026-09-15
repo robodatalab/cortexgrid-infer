@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 import torch
 
-from model_gateway.device import detect_device
+from cortexgrid_infer.device import detect_device
 
 
 _app = FastAPI()

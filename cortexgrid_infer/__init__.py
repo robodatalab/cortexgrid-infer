@@ -1,4 +1,4 @@
-from model_gateway.core import (
+from cortexgrid_infer.core import (
     CompletionChunk,
     DeployedModel,
     CompletingModel,
@@ -19,15 +19,15 @@ from model_gateway.core import (
     register_uploader,
     upload_model,
 )
-from model_gateway.device import detect_device
-from model_gateway.providers.anthropic import deploy_anthropic, AnthropicModel
-from model_gateway.providers.huggingface_complete import (
+from cortexgrid_infer.device import detect_device
+from cortexgrid_infer.providers.anthropic import deploy_anthropic, AnthropicModel
+from cortexgrid_infer.providers.huggingface_complete import (
     delete_huggingface,
     deploy_huggingface,
     upload_huggingface,
     HuggingFaceCompletingModel,
 )
-from model_gateway.providers.huggingface_image import (
+from cortexgrid_infer.providers.huggingface_image import (
     delete_huggingface_image,
     deploy_huggingface_image,
     upload_huggingface_image,
