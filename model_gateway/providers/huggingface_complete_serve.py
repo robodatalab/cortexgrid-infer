@@ -7,13 +7,12 @@ from collections.abc import AsyncIterator
 from threading import Thread
 from typing import Any
 
+import cortexgrid
+from cortexgrid import serve
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from ray import serve
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 import torch
-
-import cortexgrid
 
 from model_gateway.device import detect_device
 
