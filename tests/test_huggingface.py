@@ -178,13 +178,13 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         self.assertIsNone(deploy_huggingface("openai:gpt-4"))
         self.assertIsNone(deploy_huggingface("Qwen/Qwen2-2.5B-Instruct"))
 
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.list_deployed_models")
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_deploys_when_registry_ready(
         self,
         mock_experiment: mock.Mock,
@@ -220,13 +220,13 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
             },
         )
 
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.list_deployed_models")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.list_deployed_models")
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_reuses_existing_deployment(
         self,
         mock_experiment: mock.Mock,
@@ -246,12 +246,12 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         self.assertEqual(model.url, "http://existing/url")
         mock_deploy.assert_not_called()
 
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.deploy_model")
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_raises_when_not_registry_ready(
         self,
         mock_experiment: mock.Mock,
@@ -272,13 +272,13 @@ class TestUploadHuggingFace(unittest.TestCase):
 
     @mock.patch.dict("os.environ", {"HF_TOKEN": "tok"})
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.remote", create=True
+        "model_gateway.providers.huggingface_complete.cortexgrid.remote", create=True
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_submits_remote_ingest_when_absent(
         self,
         mock_experiment: mock.Mock,
@@ -303,13 +303,13 @@ class TestUploadHuggingFace(unittest.TestCase):
         )
 
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.remote", create=True
+        "model_gateway.providers.huggingface_complete.cortexgrid.remote", create=True
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_skips_when_already_registered(
         self,
         mock_experiment: mock.Mock,
@@ -322,7 +322,7 @@ class TestUploadHuggingFace(unittest.TestCase):
             self.assertIsNone(upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct"))
         mock_remote.assert_not_called()
 
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.save_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.save_model")
     @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
     def test_ingest_downloads_and_saves(
         self, mock_snapshot: mock.Mock, mock_save: mock.Mock
@@ -342,13 +342,13 @@ class TestUploadHuggingFace(unittest.TestCase):
         )
 
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.remote", create=True
+        "model_gateway.providers.huggingface_complete.cortexgrid.remote", create=True
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_complete.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_core_dispatch_routes_hf(
         self,
         mock_experiment: mock.Mock,
@@ -372,12 +372,12 @@ class TestUploadHuggingFace(unittest.TestCase):
 
 class TestDeleteHuggingFace(unittest.TestCase):
     def test_noop_for_non_hf_prefix(self):
-        # No cortexflow calls patched: a non-match must not touch the platform.
+        # No cortexgrid calls patched: a non-match must not touch the platform.
         self.assertIsNone(delete_huggingface("openai:gpt-4"))
 
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.delete_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.undeploy_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_undeploys_then_deletes(
         self,
         mock_experiment: mock.Mock,
@@ -389,9 +389,9 @@ class TestDeleteHuggingFace(unittest.TestCase):
         mock_undeploy.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
         mock_delete.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
 
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.delete_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.undeploy_model")
-    @mock.patch("model_gateway.providers.huggingface_complete.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.Experiment")
     def test_core_dispatch_routes_hf(
         self,
         mock_experiment: mock.Mock,

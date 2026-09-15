@@ -1,4 +1,4 @@
-"""HuggingFace provider: deploys models via cortexflow and clients them over HTTP."""
+"""HuggingFace provider: deploys models via cortexgrid and clients them over HTTP."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import os
 import re
 from typing import Any, Callable, Sequence
 
-import cortexflow
+import cortexgrid
 import httpx
 from huggingface_hub import snapshot_download
 
@@ -102,7 +102,7 @@ def parse_tool_calls(
 class HuggingFaceCompletingModel(CompletingModel):
     url: str
     model_id: str
-    # cortexflow deployment identity, carried so the owner can tear it down
+    # cortexgrid deployment identity, carried so the owner can tear it down
     # without re-deriving it from the active experiment at shutdown.
     family: str = ""
     suffix: str = ""
@@ -115,10 +115,10 @@ class HuggingFaceCompletingModel(CompletingModel):
     def undeploy(self) -> None:
         """Tear down the Ray Serve app backing this model (frees its GPU).
 
-        The weights + bundle stay in the cortexflow registry, so a later
+        The weights + bundle stay in the cortexgrid registry, so a later
         deploy re-schedules the app without re-uploading."""
         if self.family and self.suffix and self.run_name:
-            cortexflow.undeploy_model(self.family, self.suffix, self.run_name)
+            cortexgrid.undeploy_model(self.family, self.suffix, self.run_name)
 
     async def complete(
         self,
@@ -195,7 +195,7 @@ class HuggingFaceCompletingModel(CompletingModel):
 
 
 def _parse_hf_id(hf_id: str) -> tuple[str, str]:
-    """Map an HF model id to a cortexflow (family, suffix).
+    """Map an HF model id to a cortexgrid (family, suffix).
 
     Strips the org (anything before the first '/'). Splits the remainder on
     the last '-': the part before becomes family, the part after becomes
@@ -211,16 +211,16 @@ def _parse_hf_id(hf_id: str) -> tuple[str, str]:
 def _ingest_huggingface(
     hf_id: str, family: str, suffix: str, token: str | None
 ) -> None:
-    """Download the HF weights and register them in the cortexflow registry.
+    """Download the HF weights and register them in the cortexgrid registry.
 
-    Submitted to the cluster via ``cortexflow.remote`` (see `upload_huggingface`),
+    Submitted to the cluster via ``cortexgrid.remote`` (see `upload_huggingface`),
     so the weights travel HuggingFace -> cluster node -> registry and never transit
     the client. ``save_model`` scopes the version to the ambient Experiment, which
     the remote job inherits from the submitter, so it lands under the same run the
     deploy later reads."""
     with tempfile.TemporaryDirectory() as d:
         snapshot_download(repo_id=hf_id, local_dir=d, token=token)
-        cortexflow.save_model(
+        cortexgrid.save_model(
             d, HuggingFaceCompletingDeployment, family=family, suffix=suffix
         )
 
@@ -228,20 +228,20 @@ def _ingest_huggingface(
 def upload_huggingface(model_id: str) -> str | None:
     """Start ingesting *model_id*'s weights into the registry, on the cluster.
 
-    Returns the id of the background ``cortexflow.remote`` job, or None if the
+    Returns the id of the background ``cortexgrid.remote`` job, or None if the
     model is already registered (phase `uploading`/`ready`) so there is nothing to
     submit. Poll progress via ``deployment_status(model_id)``; deploy once `ready`."""
     if not model_id.startswith("hf:"):
         return None
     hf_id = model_id[len("hf:") :]
     family, suffix = _parse_hf_id(hf_id)
-    run_name = cortexflow.Experiment.get_instance().run_name()
+    run_name = cortexgrid.Experiment.get_instance().run_name()
 
-    status = cortexflow.model_registry_status(family, suffix, run_name)
+    status = cortexgrid.model_registry_status(family, suffix, run_name)
     if status is not None and status.phase in ("uploading", "ready"):
         return None
 
-    return cortexflow.remote(
+    return cortexgrid.remote(
         _ingest_huggingface,
         hf_id,
         family,
@@ -257,9 +257,9 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
         return None
     hf_id = model_id[len("hf:") :]
     family, suffix = _parse_hf_id(hf_id)
-    run_name = cortexflow.Experiment.get_instance().run_name()
+    run_name = cortexgrid.Experiment.get_instance().run_name()
 
-    status = cortexflow.model_registry_status(family, suffix, run_name)
+    status = cortexgrid.model_registry_status(family, suffix, run_name)
     if status is None or status.phase != "ready":
         phase = None if status is None else status.phase
         raise RuntimeError(
@@ -270,7 +270,7 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
     existing = next(
         (
             d
-            for d in cortexflow.list_deployed_models()
+            for d in cortexgrid.list_deployed_models()
             if d.family == family and d.suffix == suffix and d.run_name == run_name
         ),
         None,
@@ -278,7 +278,7 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
     if existing is not None:
         url = existing.url
     else:
-        deployment = cortexflow.deploy_model(
+        deployment = cortexgrid.deploy_model(
             family=family,
             suffix=suffix,
             run_name=run_name,
@@ -297,22 +297,22 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
 
 
 def hf_deployment_status(model_id: str) -> Any:
-    """Live phase of the deployment for *model_id*, delegated to cortexflow.
+    """Live phase of the deployment for *model_id*, delegated to cortexgrid.
 
     Read-only - safe to poll from a status endpoint while a deploy is in flight.
     Resolves the same (family, suffix, run_name) identity `deploy` uses. Reports
-    the serving lifecycle (`cortexflow.model_serving_status`) once a Serve app
+    the serving lifecycle (`cortexgrid.model_serving_status`) once a Serve app
     exists; before that - while the weights are still uploading to the registry -
-    it falls back to the registry lifecycle (`cortexflow.model_registry_status`),
+    it falls back to the registry lifecycle (`cortexgrid.model_registry_status`),
     so a poll stays meaningful during weight staging / scheduling too."""
     if not model_id.startswith("hf:"):
         return None
     family, suffix = _parse_hf_id(model_id[len("hf:") :])
-    run_name = cortexflow.Experiment.get_instance().run_name()
-    serving = cortexflow.model_serving_status(family, suffix, run_name)
+    run_name = cortexgrid.Experiment.get_instance().run_name()
+    serving = cortexgrid.model_serving_status(family, suffix, run_name)
     if serving.phase != "not_deployed":
         return serving
-    return cortexflow.model_registry_status(family, suffix, run_name)
+    return cortexgrid.model_registry_status(family, suffix, run_name)
 
 
 def delete_huggingface(model_id: str) -> None:
@@ -323,9 +323,9 @@ def delete_huggingface(model_id: str) -> None:
     if not model_id.startswith("hf:"):
         return
     family, suffix = _parse_hf_id(model_id[len("hf:") :])
-    run_name = cortexflow.Experiment.get_instance().run_name()
-    cortexflow.undeploy_model(family, suffix, run_name)
-    cortexflow.delete_model(family, suffix, run_name)
+    run_name = cortexgrid.Experiment.get_instance().run_name()
+    cortexgrid.undeploy_model(family, suffix, run_name)
+    cortexgrid.delete_model(family, suffix, run_name)
 
 
 register_provider("hf:", deploy_huggingface)

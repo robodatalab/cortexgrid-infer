@@ -4,7 +4,7 @@ version = "0.1.5"
 description = "Deploy and interact with models across providers (Anthropic, HuggingFace LLM + diffusion)"
 requires-python = ">=3.11"
 dependencies = [
-    "cortexflow",
+    "cortexgrid",
     "torch>=2.0.0",
     "transformers>=4.40.0",
     "huggingface_hub>=0.20.0",
@@ -20,9 +20,6 @@ dependencies = [
     "sentencepiece>=0.2",
     "protobuf>=4.0",
 ]
-
-[tool.uv.sources]
-cortexflow = { git = "https://github.com/robodatalab/robolab-infra.git" }
 
 [project.optional-dependencies]
 dev = [
