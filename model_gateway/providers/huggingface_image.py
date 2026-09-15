@@ -26,8 +26,8 @@ from model_gateway.core import (
     register_status_provider,
     register_uploader,
 )
-from model_gateway.providers.huggingface_complete import _parse_hf_id
 from model_gateway.providers.huggingface_image_serve import HuggingFaceImageDeployment
+from model_gateway.utils import parse_hf_id, remove_hf_download_metadata
 
 
 # `from_pretrained` reads the component subfolders + configs; it never touches the
@@ -125,6 +125,7 @@ def _ingest_huggingface_image(
             ignore_patterns=_snapshot_ignore_patterns(),
             token=token,
         )
+        remove_hf_download_metadata(d)
         cortexgrid.save_model(
             d, HuggingFaceImageDeployment, family=family, suffix=suffix
         )
@@ -163,7 +164,7 @@ def upload_huggingface_image(model_id: str) -> str | None:
     if not model_id.startswith("hf-image:"):
         return None
     hf_id = model_id[len("hf-image:") :]
-    family, suffix = _parse_hf_id(hf_id)
+    family, suffix = parse_hf_id(hf_id)
 
     if any(m.phase in ("uploading", "ready") for m in _family_versions(family, suffix)):
         return None
@@ -184,7 +185,7 @@ def deploy_huggingface_image(model_id: str) -> HuggingFaceImageModel | None:
     if not model_id.startswith("hf-image:"):
         return None
     hf_id = model_id[len("hf-image:") :]
-    family, suffix = _parse_hf_id(hf_id)
+    family, suffix = parse_hf_id(hf_id)
     run_name = _ready_run_name(family, suffix)
     if run_name is None:
         raise RuntimeError(
@@ -228,7 +229,7 @@ def image_deployment_status(model_id: str) -> Any:
     so a poll stays meaningful during weight staging / scheduling too."""
     if not model_id.startswith("hf-image:"):
         return None
-    family, suffix = _parse_hf_id(model_id[len("hf-image:") :])
+    family, suffix = parse_hf_id(model_id[len("hf-image:") :])
     run_name = _ready_run_name(family, suffix)
     if run_name is not None:
         serving = cortexgrid.model_serving_status(family, suffix, run_name)
@@ -250,7 +251,7 @@ def delete_huggingface_image(model_id: str) -> None:
     `deploy_huggingface_image`."""
     if not model_id.startswith("hf-image:"):
         return
-    family, suffix = _parse_hf_id(model_id[len("hf-image:") :])
+    family, suffix = parse_hf_id(model_id[len("hf-image:") :])
     for run_name in {m.run_name for m in _family_versions(family, suffix)}:
         cortexgrid.undeploy_model(family, suffix, run_name)
         cortexgrid.delete_model(family, suffix, run_name)

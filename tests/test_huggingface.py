@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import AsyncIterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 from model_gateway.providers.huggingface_complete import (
     HuggingFaceCompletingModel,
-    _parse_hf_id,
     _ingest_huggingface,
     delete_huggingface,
     deploy_huggingface,
@@ -19,25 +19,41 @@ from model_gateway.providers.huggingface_complete import (
 from model_gateway.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
 )
+from model_gateway.utils import parse_hf_id
+
+
+def _fake_snapshot_download(*, local_dir: str, **_kwargs: Any) -> None:
+    """Lay out what `snapshot_download(local_dir=...)` writes: the model files
+    plus HuggingFace's download bookkeeping under `.cache/huggingface/`."""
+    root = Path(local_dir)
+    (root / "config.json").write_text("{}")
+    metadata = root / ".cache" / "huggingface" / "download" / "config.json.metadata"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text("etag")
+
+
+def _files_under(local_dir: str) -> set[str]:
+    root = Path(local_dir)
+    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
 
 
 class TestParseHFId(unittest.TestCase):
     def test_org_and_dash(self):
         self.assertEqual(
-            _parse_hf_id("Qwen/Qwen2-2.5B-Instruct"), ("Qwen2-2.5B", "Instruct")
+            parse_hf_id("Qwen/Qwen2-2.5B-Instruct"), ("Qwen2-2.5B", "Instruct")
         )
 
     def test_org_no_dash(self):
-        self.assertEqual(_parse_hf_id("openai/gpt2"), ("gpt2", "base"))
+        self.assertEqual(parse_hf_id("openai/gpt2"), ("gpt2", "base"))
 
     def test_no_org_no_dash(self):
-        self.assertEqual(_parse_hf_id("gpt2"), ("gpt2", "base"))
+        self.assertEqual(parse_hf_id("gpt2"), ("gpt2", "base"))
 
     def test_no_org_with_dash(self):
-        self.assertEqual(_parse_hf_id("model-v1"), ("model", "v1"))
+        self.assertEqual(parse_hf_id("model-v1"), ("model", "v1"))
 
     def test_multiple_dashes_split_on_last(self):
-        self.assertEqual(_parse_hf_id("a/b-c-d-e"), ("b-c-d", "e"))
+        self.assertEqual(parse_hf_id("a/b-c-d-e"), ("b-c-d", "e"))
 
 
 # --- HTTP streaming fakes for HuggingFaceCompletingModel.complete ---
@@ -321,6 +337,21 @@ class TestUploadHuggingFace(unittest.TestCase):
             mock_registry.return_value = SimpleNamespace(phase=phase)
             self.assertIsNone(upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct"))
         mock_remote.assert_not_called()
+
+    @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.save_model")
+    @mock.patch(
+        "model_gateway.providers.huggingface_complete.snapshot_download",
+        side_effect=_fake_snapshot_download,
+    )
+    def test_ingest_does_not_save_hf_download_metadata(
+        self, _mock_snapshot: mock.Mock, mock_save: mock.Mock
+    ):
+        saved: list[set[str]] = []
+        mock_save.side_effect = lambda d, *_a, **_k: saved.append(_files_under(d))
+
+        _ingest_huggingface("Qwen/Qwen2-2.5B-Instruct", "Qwen2-2.5B", "Instruct", "tok")
+
+        self.assertEqual(saved, [{"config.json"}])
 
     @mock.patch("model_gateway.providers.huggingface_complete.cortexgrid.save_model")
     @mock.patch("model_gateway.providers.huggingface_complete.snapshot_download")
