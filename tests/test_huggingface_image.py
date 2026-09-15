@@ -108,12 +108,22 @@ class _FakeDeployment:
         self.url = url
 
 
-class _FakeExperiment:
-    def __init__(self, run_name: str) -> None:
-        self._run_name = run_name
+class _FakeSavedModel:
+    """Stands in for a cortexgrid SavedModel record from ``list_models()``."""
 
-    def run_name(self) -> str:
-        return self._run_name
+    def __init__(
+        self,
+        family: str,
+        suffix: str,
+        run_name: str,
+        phase: str,
+        created_at: str = "2026-01-01T00:00:00+00:00",
+    ) -> None:
+        self.family = family
+        self.suffix = suffix
+        self.run_name = run_name
+        self.phase = phase
+        self.created_at = created_at
 
 
 class TestDeployHuggingFaceImageFlow(unittest.TestCase):
@@ -121,24 +131,23 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
         self.assertIsNone(deploy_huggingface_image("hf:Qwen/Qwen2-Instruct"))
         self.assertIsNone(deploy_huggingface_image("openai:gpt-4"))
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.deploy_model")
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.list_deployed_models"
+        "model_gateway.providers.huggingface_image.cortexgrid.list_deployed_models"
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
     def test_deploys_when_registry_ready(
         self,
-        mock_experiment: mock.Mock,
-        mock_registry: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_list_deployed: mock.Mock,
         mock_deploy: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_registry.return_value = SimpleNamespace(phase="ready")
+        mock_list_models.return_value = [
+            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
+        ]
         mock_list_deployed.return_value = []
         mock_deploy.return_value = _FakeDeployment(
             "FLUX.2-klein-base", "4B", "run-1",
@@ -166,24 +175,23 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
             },
         )
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.deploy_model")
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.list_deployed_models"
+        "model_gateway.providers.huggingface_image.cortexgrid.list_deployed_models"
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
     def test_reuses_existing_deployment(
         self,
-        mock_experiment: mock.Mock,
-        mock_registry: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_list_deployed: mock.Mock,
         mock_deploy: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_registry.return_value = SimpleNamespace(phase="ready")
+        mock_list_models.return_value = [
+            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
+        ]
         mock_list_deployed.return_value = [
             _FakeDeployment("FLUX.2-klein-base", "4B", "run-1", "http://existing/url")
         ]
@@ -196,21 +204,22 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
         self.assertEqual(model.url, "http://existing/url")
         mock_deploy.assert_not_called()
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.deploy_model")
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
     def test_raises_when_not_registry_ready(
         self,
-        mock_experiment: mock.Mock,
-        mock_registry: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_deploy: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        for status in (None, SimpleNamespace(phase="uploading")):
-            mock_registry.return_value = status
+        # No versions at all, or only a still-uploading one: nothing ready to deploy.
+        for versions in (
+            [],
+            [_FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "uploading")],
+        ):
+            mock_list_models.return_value = versions
             with self.assertRaises(RuntimeError):
                 deploy_huggingface_image(
                     "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
@@ -223,20 +232,17 @@ class TestUploadHuggingFaceImage(unittest.TestCase):
         self.assertIsNone(upload_huggingface_image("hf:Qwen/Qwen2-Instruct"))
 
     @mock.patch.dict("os.environ", {"HF_TOKEN": "tok"})
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.remote", create=True)
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.remote", create=True)
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
     def test_submits_remote_ingest_when_absent(
         self,
-        mock_experiment: mock.Mock,
-        mock_registry: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_remote: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_registry.return_value = None
+        mock_list_models.return_value = []
         mock_remote.return_value = "job-1"
 
         job = upload_huggingface_image(
@@ -253,21 +259,21 @@ class TestUploadHuggingFaceImage(unittest.TestCase):
         )
         self.assertEqual(mock_remote.call_args.kwargs, {"num_gpus": 0, "num_cpus": 2})
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.remote", create=True)
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.remote", create=True)
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
     def test_skips_when_already_registered(
         self,
-        mock_experiment: mock.Mock,
-        mock_registry: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_remote: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        # Registered under some (possibly older) run: never re-ingest.
         for phase in ("uploading", "ready"):
-            mock_registry.return_value = SimpleNamespace(phase=phase)
+            mock_list_models.return_value = [
+                _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", phase)
+            ]
             self.assertIsNone(
                 upload_huggingface_image(
                     "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
@@ -275,7 +281,7 @@ class TestUploadHuggingFaceImage(unittest.TestCase):
             )
         mock_remote.assert_not_called()
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.save_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.save_model")
     @mock.patch("model_gateway.providers.huggingface_image.snapshot_download")
     def test_ingest_downloads_and_saves(
         self, mock_snapshot: mock.Mock, mock_save: mock.Mock
@@ -298,7 +304,7 @@ class TestUploadHuggingFaceImage(unittest.TestCase):
 
 
 class TestUndeploy(unittest.TestCase):
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.undeploy_model")
     def test_undeploy_tears_down_serve_app(self, mock_undeploy: mock.Mock):
         model = HuggingFaceImageModel(
             url="http://h/r/F/S/R", model_id="hf-image:x",
@@ -307,29 +313,28 @@ class TestUndeploy(unittest.TestCase):
         model.undeploy()
         mock_undeploy.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.undeploy_model")
     def test_undeploy_is_noop_without_identifiers(self, mock_undeploy: mock.Mock):
         HuggingFaceImageModel(url="u", model_id="hf-image:x").undeploy()
         mock_undeploy.assert_not_called()
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.deploy_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.deploy_model")
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.list_deployed_models"
+        "model_gateway.providers.huggingface_image.cortexgrid.list_deployed_models"
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
     def test_deployed_model_carries_identifiers(
         self,
-        mock_experiment: mock.Mock,
-        mock_registry: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_list_deployed: mock.Mock,
         mock_deploy: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_registry.return_value = SimpleNamespace(phase="ready")
+        mock_list_models.return_value = [
+            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
+        ]
         mock_list_deployed.return_value = [
             _FakeDeployment("FLUX.2-klein-base", "4B", "run-1", "http://existing/url")
         ]
@@ -351,22 +356,27 @@ class TestImageDeploymentStatus(unittest.TestCase):
         self.assertIsNone(image_deployment_status("hf:Qwen/Qwen2-Instruct"))
 
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.model_registry_status",
         create=True,
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_serving_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.model_serving_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
+        create=True,
+    )
     def test_reports_serving_status_once_deployed(
         self,
-        mock_experiment: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_serving: mock.Mock,
         mock_registry: mock.Mock,
     ):
         from model_gateway.providers.huggingface_image import image_deployment_status
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_list_models.return_value = [
+            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
+        ]
         mock_serving.return_value = SimpleNamespace(phase="running")
         result = image_deployment_status(
             "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
@@ -376,47 +386,57 @@ class TestImageDeploymentStatus(unittest.TestCase):
         mock_registry.assert_not_called()
 
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.model_registry_status",
         create=True,
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_serving_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.model_serving_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
+        create=True,
+    )
     def test_falls_back_to_registry_status_before_deploy(
         self,
-        mock_experiment: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_serving: mock.Mock,
         mock_registry: mock.Mock,
     ):
         from model_gateway.providers.huggingface_image import image_deployment_status
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_serving.return_value = SimpleNamespace(phase="not_deployed")
+        # No ready version yet: report the newest (in-flight) version's registry phase.
+        mock_list_models.return_value = [
+            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "uploading")
+        ]
         mock_registry.return_value = SimpleNamespace(phase="uploading")
         result = image_deployment_status(
             "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
         )
         self.assertEqual(result.phase, "uploading")
-        mock_registry.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+        mock_serving.assert_not_called()
 
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_registry_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.model_registry_status",
         create=True,
     )
     @mock.patch(
-        "model_gateway.providers.huggingface_image.cortexflow.model_serving_status",
+        "model_gateway.providers.huggingface_image.cortexgrid.model_serving_status",
         create=True,
     )
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
+        create=True,
+    )
     def test_core_dispatch_routes_hf_image(
         self,
-        mock_experiment: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_serving: mock.Mock,
         mock_registry: mock.Mock,
     ):
         import model_gateway
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_list_models.return_value = [
+            _FakeSavedModel("Model", "4B", "run-1", "ready")
+        ]
         mock_serving.return_value = SimpleNamespace(phase="running")
         result = model_gateway.deployment_status("hf-image:org/Model-4B")
         self.assertEqual(result.phase, "running")
@@ -430,31 +450,41 @@ class TestDeleteHuggingFaceImage(unittest.TestCase):
     def test_noop_for_non_hf_image_prefix(self):
         self.assertIsNone(delete_huggingface_image("hf:Qwen/Qwen2-Instruct"))
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.delete_model")
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.undeploy_model")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
+        create=True,
+    )
     def test_undeploys_then_deletes(
         self,
-        mock_experiment: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_undeploy: mock.Mock,
         mock_delete: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_list_models.return_value = [
+            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
+        ]
         delete_huggingface_image("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
         mock_undeploy.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
         mock_delete.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
 
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.delete_model")
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.undeploy_model")
-    @mock.patch("model_gateway.providers.huggingface_image.cortexflow.Experiment")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.delete_model")
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.undeploy_model")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.cortexgrid.list_models",
+        create=True,
+    )
     def test_core_dispatch_routes_hf_image(
         self,
-        mock_experiment: mock.Mock,
+        mock_list_models: mock.Mock,
         mock_undeploy: mock.Mock,
         mock_delete: mock.Mock,
     ):
         import model_gateway
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
+        mock_list_models.return_value = [
+            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
+        ]
         model_gateway.delete_model("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
         mock_delete.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
 

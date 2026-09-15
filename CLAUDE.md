@@ -4,8 +4,8 @@ Library for running inference on a wide range of models
 
 ## Related repos
 
-- `robolab-infra` — infrastructure used to deploy models. It hosts the `cortexflow` SDK that is used to access the infrastructure programmaticaly.
-- `model-training` — Training facilities (SFT, LoRA), depends on `cortexflow`
+- `cortexgrid` — infrastructure used to deploy models. It hosts the `cortexgrid` SDK that is used to access the infrastructure programmaticaly.
+- `model-training` — Training facilities (SFT, LoRA), depends on `cortexgrid`
 
 ## Important rules
 

@@ -128,7 +128,7 @@ def deploy_model(model_id: str) -> DeployedModel:
 
 # Status providers mirror deploy providers: a prefix -> a function that reports the
 # live deployment status for that model id (delegating to the platform, e.g.
-# cortexflow.model_serving_status). Kept separate from _providers because a status
+# cortexgrid.model_serving_status). Kept separate from _providers because a status
 # query must NOT construct/deploy anything - it just reads current state.
 _status_providers: list[tuple[str, Callable[[str], Any]]] = []
 
@@ -142,8 +142,8 @@ def deployment_status(model_id: str) -> Any:
     """Report the current deployment status/phase for *model_id*, or None if no
     status provider handles it (e.g. hosted-API models with nothing to schedule).
     The returned object is whatever the platform reports - for cluster-backed
-    providers, a ``cortexflow.ServingStatus`` (``phase`` + ``message``) once a
-    Serve app exists, or a ``cortexflow.SavedModel`` while the weights are still
+    providers, a ``cortexgrid.ServingStatus`` (``phase`` + ``message``) once a
+    Serve app exists, or a ``cortexgrid.SavedModel`` while the weights are still
     uploading to the registry."""
     for prefix, fn in _status_providers:
         if not model_id.startswith(prefix):
@@ -155,7 +155,7 @@ def deployment_status(model_id: str) -> Any:
 
 
 # Uploaders mirror deploy/status providers: a prefix -> a function that STARTS an
-# ingest of the model's weights into the cortexflow registry and returns the id of
+# ingest of the model's weights into the cortexgrid registry and returns the id of
 # the background job doing it, or None when there is nothing to upload (already
 # registered, or a hosted-API model with no weights). This is deliberately split
 # from deploy: a model must be uploaded (registry phase `ready`) before
@@ -170,7 +170,7 @@ def register_uploader(prefix: str, fn: Callable[[str], str | None]) -> None:
 
 
 def upload_model(model_id: str) -> str | None:
-    """Start uploading *model_id*'s weights into the cortexflow registry, returning
+    """Start uploading *model_id*'s weights into the cortexgrid registry, returning
     the id of the background job doing it, or None if nothing needs uploading
     (already registered, or a hosted-API model with no weights to stage).
 

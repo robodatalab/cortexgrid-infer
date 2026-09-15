@@ -1,4 +1,4 @@
-"""Ray Serve deployment that loads a HuggingFace model from the cortexflow registry."""
+"""Ray Serve deployment that loads a HuggingFace model from the cortexgrid registry."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from ray import serve
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
 import torch
 
-import cortexflow
+import cortexgrid
 
 from model_gateway.device import detect_device
 
@@ -38,7 +38,7 @@ class HuggingFaceCompletingDeployment:
     num_replicas = 1
 
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        path = cortexflow.load_model(family, suffix, run_name)
+        path = cortexgrid.load_model(family, suffix, run_name)
         self._device = detect_device()
         self._tokenizer = AutoTokenizer.from_pretrained(path)
         if self._tokenizer.pad_token is None:

@@ -1,15 +1,15 @@
 # model-gateway
 
 One API to run inference across providers — hosted APIs (Anthropic) and models you
-deploy yourself on the [cortexflow](https://github.com/robodatalab/robolab-infra)
+deploy yourself on the [cortexgrid](https://github.com/robodatalab/cortexgrid)
 cluster (HuggingFace LLMs and diffusion pipelines). You address every model by a
 single **model id** string; the gateway routes it to the right provider by prefix.
 
 | Prefix | Provider | Weights live on the cluster? |
 |---|---|---|
 | `Anthropic/` | Anthropic hosted API (e.g. `Anthropic/claude-sonnet-5`) | no — hosted |
-| `hf:` | HuggingFace causal-LM, served via cortexflow (e.g. `hf:Qwen/Qwen2.5-7B-Instruct`) | yes |
-| `hf-image:` | HuggingFace diffusion pipeline, served via cortexflow (e.g. `hf-image:black-forest-labs/FLUX.2-klein-base-4B`) | yes |
+| `hf:` | HuggingFace causal-LM, served via cortexgrid (e.g. `hf:Qwen/Qwen2.5-7B-Instruct`) | yes |
+| `hf-image:` | HuggingFace diffusion pipeline, served via cortexgrid (e.g. `hf-image:black-forest-labs/FLUX.2-klein-base-4B`) | yes |
 
 ## The model lifecycle
 
@@ -23,9 +23,9 @@ upload_model ──▶ [ registry: uploading ─▶ ready ] ──▶ deploy_mod
      └── weights ingested HF ─▶ cluster node ─▶ registry (never through your machine)      undeploy_model / delete_model
 ```
 
-- **Upload** stages the weights into the cortexflow registry. The download from
+- **Upload** stages the weights into the cortexgrid registry. The download from
   HuggingFace and the upload to the registry both run **on the cluster** (submitted
-  as a `cortexflow.remote` job), so large weights never round-trip through your
+  as a `cortexgrid.remote` job), so large weights never round-trip through your
   machine. Returns a job id; poll until the model is `ready`.
 - **Deploy** schedules the model as a Ray Serve app and returns a client. It
   requires the model to be registry-`ready` (raises otherwise).
@@ -37,15 +37,15 @@ upload_model ──▶ [ registry: uploading ─▶ ready ] ──▶ deploy_mod
 
 ## Quick start
 
-Every session starts a cortexflow run; the model's registry/serving identity is
+Every session starts a cortexgrid run; the model's registry/serving identity is
 scoped to it.
 
 ```python
 import asyncio, time
-import cortexflow
+import cortexgrid
 import model_gateway as mg
 
-cortexflow.init(experiment="img-gen")   # one call per process; starts an MLflow run
+cortexgrid.init(experiment="img-gen")   # one call per process; starts an MLflow run
 mid = "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
 
 # 1. Upload — ingest weights into the registry, on the cluster.
@@ -117,12 +117,12 @@ Extending to a new provider means registering four prefix handlers:
 
 ### Status phases
 
-`deployment_status(id).phase` surfaces cortexflow's lifecycle phases directly:
+`deployment_status(id).phase` surfaces cortexgrid's lifecycle phases directly:
 
 - **Registry** (while uploading): `uploading` → `ready`; `upload_failed` / `broken` on error.
 - **Serving** (once deployed): `not_started` → `deploying` → `running`; `unhealthy` / `failed` / `deleting`.
 
-See the [cortexflow model-serving docs](https://github.com/robodatalab/robolab-infra/blob/main/docs/cortexflow/model-serving.md)
+See the [cortexgrid model-serving docs](https://github.com/robodatalab/cortexgrid/blob/main/docs/cortexgrid/model-serving.md)
 for the full state machine and error table.
 
 ## Notes
@@ -134,6 +134,6 @@ for the full state machine and error table.
   the pipeline loads are staged). Extend per-model with `HF_IMAGE_SNAPSHOT_IGNORE`
   (comma-separated globs).
 - **Run scoping.** A model's identity is `(family, suffix, run_name)`, derived from
-  the model id and the active cortexflow run. Upload, deploy, status, and delete all
-  resolve the same identity, so they must run against the same `cortexflow.init`
+  the model id and the active cortexgrid run. Upload, deploy, status, and delete all
+  resolve the same identity, so they must run against the same `cortexgrid.init`
   experiment/run.

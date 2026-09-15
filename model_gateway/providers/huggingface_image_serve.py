@@ -1,5 +1,5 @@
 """Ray Serve deployment that loads a HuggingFace diffusion pipeline from the
-cortexflow registry and exposes a single POST /generate endpoint.
+cortexgrid registry and exposes a single POST /generate endpoint.
 
 The pipeline class is not hardcoded: it is read from the model's
 ``model_index.json`` (``_class_name``) and resolved against ``diffusers``, so
@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 
-import cortexflow
+import cortexgrid
 import diffusers
 from fastapi import FastAPI
 from PIL import Image, ImageOps
@@ -64,7 +64,7 @@ class HuggingFaceImageDeployment:
     num_replicas = 1
 
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        path = cortexflow.load_model(family, suffix, run_name)
+        path = cortexgrid.load_model(family, suffix, run_name)
         self._device = detect_device()
         pipe = _pipeline_class(path).from_pretrained(path, torch_dtype=torch.bfloat16)
         pipe = pipe.to(self._device)

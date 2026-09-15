@@ -1,4 +1,4 @@
-"""HuggingFace image provider: deploys a diffusers pipeline via cortexflow and
+"""HuggingFace image provider: deploys a diffusers pipeline via cortexgrid and
 clients it over HTTP.
 
 The image analogue of :mod:`model_gateway.providers.huggingface`. Model ids use
@@ -14,7 +14,7 @@ import os
 import tempfile
 from typing import Any
 
-import cortexflow
+import cortexgrid
 import httpx
 from huggingface_hub import snapshot_download
 
@@ -50,7 +50,7 @@ def _snapshot_ignore_patterns() -> list[str]:
 class HuggingFaceImageModel(GeneratingModel):
     url: str
     model_id: str
-    # cortexflow deployment identity, carried so the owner can tear it down
+    # cortexgrid deployment identity, carried so the owner can tear it down
     # without re-deriving it from the active experiment at shutdown.
     family: str = ""
     suffix: str = ""
@@ -63,10 +63,10 @@ class HuggingFaceImageModel(GeneratingModel):
     def undeploy(self) -> None:
         """Tear down the Ray Serve app backing this model (frees its GPU).
 
-        The weights + bundle stay in the cortexflow registry, so a later
+        The weights + bundle stay in the cortexgrid registry, so a later
         deploy re-schedules the app without re-uploading."""
         if self.family and self.suffix and self.run_name:
-            cortexflow.undeploy_model(self.family, self.suffix, self.run_name)
+            cortexgrid.undeploy_model(self.family, self.suffix, self.run_name)
 
     async def generate(
         self,
@@ -111,9 +111,9 @@ class HuggingFaceImageModel(GeneratingModel):
 def _ingest_huggingface_image(
     hf_id: str, family: str, suffix: str, token: str | None
 ) -> None:
-    """Download the HF pipeline weights and register them in the cortexflow registry.
+    """Download the HF pipeline weights and register them in the cortexgrid registry.
 
-    Submitted to the cluster via ``cortexflow.remote`` (see `upload_huggingface_image`),
+    Submitted to the cluster via ``cortexgrid.remote`` (see `upload_huggingface_image`),
     so the weights travel HuggingFace -> cluster node -> registry and never transit
     the client - which matters most here, where image pipelines run to tens of GB.
     ``save_model`` scopes the version to the ambient Experiment, which the remote job
@@ -125,28 +125,51 @@ def _ingest_huggingface_image(
             ignore_patterns=_snapshot_ignore_patterns(),
             token=token,
         )
-        cortexflow.save_model(
+        cortexgrid.save_model(
             d, HuggingFaceImageDeployment, family=family, suffix=suffix
         )
+
+
+def _family_versions(family: str, suffix: str) -> list[Any]:
+    """Every registry version of this model, newest first, across all runs.
+
+    cortexgrid scopes a version to the run that uploaded it, but a HuggingFace
+    base model is immutable, so any run's copy is interchangeable. Resolving by
+    family/suffix (not by the active experiment run) is what lets the backend
+    start a fresh run every boot without re-ingesting multi-GB weights each time."""
+    versions = [
+        m
+        for m in cortexgrid.list_models()
+        if m.family == family and m.suffix == suffix
+    ]
+    return sorted(versions, key=lambda m: m.created_at, reverse=True)
+
+
+def _ready_run_name(family: str, suffix: str) -> str | None:
+    """run_name of the newest ``ready`` version of this model, or None if none is."""
+    return next(
+        (m.run_name for m in _family_versions(family, suffix) if m.phase == "ready"),
+        None,
+    )
 
 
 def upload_huggingface_image(model_id: str) -> str | None:
     """Start ingesting *model_id*'s weights into the registry, on the cluster.
 
-    Returns the id of the background ``cortexflow.remote`` job, or None if the
-    model is already registered (phase `uploading`/`ready`) so there is nothing to
-    submit. Poll progress via ``deployment_status(model_id)``; deploy once `ready`."""
+    Returns the id of the background ``cortexgrid.remote`` job, or None if the
+    model is already registered under *any* run (phase `uploading`/`ready`) so
+    there is nothing to submit. Poll progress via ``deployment_status(model_id)``;
+    deploy once `ready`."""
     if not model_id.startswith("hf-image:"):
         return None
     hf_id = model_id[len("hf-image:") :]
     family, suffix = _parse_hf_id(hf_id)
-    run_name = cortexflow.Experiment.get_instance().run_name()
 
-    status = cortexflow.model_registry_status(family, suffix, run_name)
-    if status is not None and status.phase in ("uploading", "ready"):
+    if any(m.phase in ("uploading", "ready") for m in _family_versions(family, suffix)):
         return None
 
-    return cortexflow.remote(
+    # First upload: the ingest job registers the version under the active run.
+    return cortexgrid.remote(
         _ingest_huggingface_image,
         hf_id,
         family,
@@ -162,20 +185,17 @@ def deploy_huggingface_image(model_id: str) -> HuggingFaceImageModel | None:
         return None
     hf_id = model_id[len("hf-image:") :]
     family, suffix = _parse_hf_id(hf_id)
-    run_name = cortexflow.Experiment.get_instance().run_name()
-
-    status = cortexflow.model_registry_status(family, suffix, run_name)
-    if status is None or status.phase != "ready":
-        phase = None if status is None else status.phase
+    run_name = _ready_run_name(family, suffix)
+    if run_name is None:
         raise RuntimeError(
-            f"Model '{model_id}' is not registry-ready (phase={phase}); call "
+            f"Model '{model_id}' has no registry-ready version; call "
             f"upload_model('{model_id}') and wait for phase 'ready' before deploying."
         )
 
     existing = next(
         (
             d
-            for d in cortexflow.list_deployed_models()
+            for d in cortexgrid.list_deployed_models()
             if d.family == family and d.suffix == suffix and d.run_name == run_name
         ),
         None,
@@ -183,7 +203,7 @@ def deploy_huggingface_image(model_id: str) -> HuggingFaceImageModel | None:
     if existing is not None:
         url = existing.url
     else:
-        deployment = cortexflow.deploy_model(
+        deployment = cortexgrid.deploy_model(
             family=family, suffix=suffix, run_name=run_name, wait=True, timeout=None
         )
         url = deployment.url
@@ -198,35 +218,42 @@ def deploy_huggingface_image(model_id: str) -> HuggingFaceImageModel | None:
 
 
 def image_deployment_status(model_id: str) -> Any:
-    """Live phase of the deployment for *model_id*, delegated to cortexflow.
+    """Live phase of the deployment for *model_id*, delegated to cortexgrid.
 
     Read-only - safe to poll from a status endpoint while a deploy is in flight.
     Resolves the same (family, suffix, run_name) identity `deploy` uses. Reports
-    the serving lifecycle (`cortexflow.model_serving_status`) once a Serve app
+    the serving lifecycle (`cortexgrid.model_serving_status`) once a Serve app
     exists; before that - while the weights are still uploading to the registry -
-    it falls back to the registry lifecycle (`cortexflow.model_registry_status`),
+    it falls back to the registry lifecycle (`cortexgrid.model_registry_status`),
     so a poll stays meaningful during weight staging / scheduling too."""
     if not model_id.startswith("hf-image:"):
         return None
     family, suffix = _parse_hf_id(model_id[len("hf-image:") :])
-    run_name = cortexflow.Experiment.get_instance().run_name()
-    serving = cortexflow.model_serving_status(family, suffix, run_name)
-    if serving.phase != "not_deployed":
-        return serving
-    return cortexflow.model_registry_status(family, suffix, run_name)
+    run_name = _ready_run_name(family, suffix)
+    if run_name is not None:
+        serving = cortexgrid.model_serving_status(family, suffix, run_name)
+        if serving.phase != "not_deployed":
+            return serving
+        return cortexgrid.model_registry_status(family, suffix, run_name)
+    # Nothing ready yet: report the newest in-flight/failed version, if any.
+    versions = _family_versions(family, suffix)
+    return versions[0] if versions else None
 
 
 def delete_huggingface_image(model_id: str) -> None:
     """Undeploy (if running) and delete this model's weights + serve bundle.
 
-    Idempotent: safe whether or not the model is deployed or registered, so it is
-    the inverse of `upload_huggingface_image` + `deploy_huggingface_image`."""
+    Removes every registered version of the model across runs (deploy/upload
+    resolve by family/suffix, not by the active run, so a single run_name no
+    longer identifies the weights). Idempotent: safe whether or not the model is
+    deployed or registered, so it is the inverse of `upload_huggingface_image` +
+    `deploy_huggingface_image`."""
     if not model_id.startswith("hf-image:"):
         return
     family, suffix = _parse_hf_id(model_id[len("hf-image:") :])
-    run_name = cortexflow.Experiment.get_instance().run_name()
-    cortexflow.undeploy_model(family, suffix, run_name)
-    cortexflow.delete_model(family, suffix, run_name)
+    for run_name in {m.run_name for m in _family_versions(family, suffix)}:
+        cortexgrid.undeploy_model(family, suffix, run_name)
+        cortexgrid.delete_model(family, suffix, run_name)
 
 
 register_provider("hf-image:", deploy_huggingface_image)
