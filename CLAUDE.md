@@ -1,4 +1,4 @@
-# RoboLab  Model Gateway
+# RoboDataLab Model Gateway
 
 Library for running inference on a wide range of models
 
