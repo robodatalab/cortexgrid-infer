@@ -30,7 +30,7 @@ from model_gateway.core import (
 from model_gateway.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
 )
-from model_gateway.utils import build_tool_map, normalize_tools
+from model_gateway.utils import build_tool_map, normalize_tools, parse_hf_id, remove_hf_download_metadata
 
 
 _tool_call_id_counter = itertools.count()
@@ -194,20 +194,6 @@ class HuggingFaceCompletingModel(CompletingModel):
             yield CompletionChunk(finish_reason="stop")
 
 
-def _parse_hf_id(hf_id: str) -> tuple[str, str]:
-    """Map an HF model id to a cortexgrid (family, suffix).
-
-    Strips the org (anything before the first '/'). Splits the remainder on
-    the last '-': the part before becomes family, the part after becomes
-    suffix. If there is no '-', suffix defaults to 'base'.
-    """
-    name = hf_id.split("/", 1)[-1]
-    if "-" not in name:
-        return name, "base"
-    family, _, suffix = name.rpartition("-")
-    return family, suffix
-
-
 def _ingest_huggingface(
     hf_id: str, family: str, suffix: str, token: str | None
 ) -> None:
@@ -220,6 +206,7 @@ def _ingest_huggingface(
     deploy later reads."""
     with tempfile.TemporaryDirectory() as d:
         snapshot_download(repo_id=hf_id, local_dir=d, token=token)
+        remove_hf_download_metadata(d)
         cortexgrid.save_model(
             d, HuggingFaceCompletingDeployment, family=family, suffix=suffix
         )
@@ -234,7 +221,7 @@ def upload_huggingface(model_id: str) -> str | None:
     if not model_id.startswith("hf:"):
         return None
     hf_id = model_id[len("hf:") :]
-    family, suffix = _parse_hf_id(hf_id)
+    family, suffix = parse_hf_id(hf_id)
     run_name = cortexgrid.Experiment.get_instance().run_name()
 
     status = cortexgrid.model_registry_status(family, suffix, run_name)
@@ -256,7 +243,7 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
     if not model_id.startswith("hf:"):
         return None
     hf_id = model_id[len("hf:") :]
-    family, suffix = _parse_hf_id(hf_id)
+    family, suffix = parse_hf_id(hf_id)
     run_name = cortexgrid.Experiment.get_instance().run_name()
 
     status = cortexgrid.model_registry_status(family, suffix, run_name)
@@ -307,7 +294,7 @@ def hf_deployment_status(model_id: str) -> Any:
     so a poll stays meaningful during weight staging / scheduling too."""
     if not model_id.startswith("hf:"):
         return None
-    family, suffix = _parse_hf_id(model_id[len("hf:") :])
+    family, suffix = parse_hf_id(model_id[len("hf:") :])
     run_name = cortexgrid.Experiment.get_instance().run_name()
     serving = cortexgrid.model_serving_status(family, suffix, run_name)
     if serving.phase != "not_deployed":
@@ -322,7 +309,7 @@ def delete_huggingface(model_id: str) -> None:
     the inverse of `upload_huggingface` + `deploy_huggingface` for cleanup."""
     if not model_id.startswith("hf:"):
         return
-    family, suffix = _parse_hf_id(model_id[len("hf:") :])
+    family, suffix = parse_hf_id(model_id[len("hf:") :])
     run_name = cortexgrid.Experiment.get_instance().run_name()
     cortexgrid.undeploy_model(family, suffix, run_name)
     cortexgrid.delete_model(family, suffix, run_name)

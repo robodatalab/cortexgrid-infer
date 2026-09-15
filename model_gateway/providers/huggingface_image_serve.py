@@ -19,10 +19,10 @@ from typing import Any
 
 
 import cortexgrid
+from cortexgrid import serve
 import diffusers
 from fastapi import FastAPI
 from PIL import Image, ImageOps
-from ray import serve
 import torch
 
 from model_gateway.device import detect_device

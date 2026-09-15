@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
@@ -18,6 +19,21 @@ from model_gateway.providers.huggingface_image import (
 from model_gateway.providers.huggingface_image_serve import (
     HuggingFaceImageDeployment,
 )
+
+
+def _fake_snapshot_download(*, local_dir: str, **_kwargs: Any) -> None:
+    """Lay out what `snapshot_download(local_dir=...)` writes: the model files
+    plus HuggingFace's download bookkeeping under `.cache/huggingface/`."""
+    root = Path(local_dir)
+    (root / "config.json").write_text("{}")
+    metadata = root / ".cache" / "huggingface" / "download" / "config.json.metadata"
+    metadata.parent.mkdir(parents=True)
+    metadata.write_text("etag")
+
+
+def _files_under(local_dir: str) -> set[str]:
+    root = Path(local_dir)
+    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
 
 
 class _FakeResponse:
@@ -280,6 +296,23 @@ class TestUploadHuggingFaceImage(unittest.TestCase):
                 )
             )
         mock_remote.assert_not_called()
+
+    @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.save_model")
+    @mock.patch(
+        "model_gateway.providers.huggingface_image.snapshot_download",
+        side_effect=_fake_snapshot_download,
+    )
+    def test_ingest_does_not_save_hf_download_metadata(
+        self, _mock_snapshot: mock.Mock, mock_save: mock.Mock
+    ):
+        saved: list[set[str]] = []
+        mock_save.side_effect = lambda d, *_a, **_k: saved.append(_files_under(d))
+
+        _ingest_huggingface_image(
+            "black-forest-labs/FLUX.2-klein-base-4B", "FLUX.2-klein-base", "4B", "tok"
+        )
+
+        self.assertEqual(saved, [{"config.json"}])
 
     @mock.patch("model_gateway.providers.huggingface_image.cortexgrid.save_model")
     @mock.patch("model_gateway.providers.huggingface_image.snapshot_download")

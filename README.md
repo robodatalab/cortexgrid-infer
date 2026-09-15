@@ -26,7 +26,9 @@ upload_model ──▶ [ registry: uploading ─▶ ready ] ──▶ deploy_mod
 - **Upload** stages the weights into the cortexgrid registry. The download from
   HuggingFace and the upload to the registry both run **on the cluster** (submitted
   as a `cortexgrid.remote` job), so large weights never round-trip through your
-  machine. Returns a job id; poll until the model is `ready`.
+  machine. Only the model files are stored: HuggingFace's download bookkeeping
+  (`.cache/huggingface/` inside the download folder) is dropped first. Returns a job
+  id; poll until the model is `ready`.
 - **Deploy** schedules the model as a Ray Serve app and returns a client. It
   requires the model to be registry-`ready` (raises otherwise).
 - **Query** reports one combined phase across both lifecycles — registry while the

@@ -8,5 +8,4 @@ build/
 .venv/
 venv/
 .env
-uv.lock
 .claude
