@@ -36,8 +36,8 @@ jobs:
                     git add pyproject.toml
                     git diff --cached --quiet && exit 0
                     git commit -m "bump version to $NEW"
-                    git tag "v$NEW"
-                    git push origin HEAD:main --follow-tags && exit 0
+                    git tag -f "v$NEW"
+                    git push --atomic origin HEAD:main "v$NEW" && exit 0
                     sleep 3
                   done
                   exit 1
