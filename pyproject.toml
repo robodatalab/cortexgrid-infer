@@ -5,18 +5,20 @@ description = "Deploy and interact with models across providers (Anthropic, Hugg
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.12"
 dependencies = [
     # wait_for_model_serving / ModelDeployFailed, and deploy_model clearing a
-    # failed Serve app.
-    "cortexgrid>=0.2.92",
+    # failed Serve app. 0.2.93: serve-app routes work on the Ray 2.58 cluster.
+    "cortexgrid>=0.2.93",
     "torch>=2.0.0",
     "transformers>=4.40.0",
     "huggingface_hub>=0.20.0",
     "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
-    "fastapi==0.108.0",
+    # The serve-apps run on the cluster's FastAPI, which Ray 2.58's Serve
+    # requires to be >=0.133.
+    "fastapi>=0.133",
     # Diffusion serving (huggingface_image provider). FLUX.2 pipelines land in
     # diffusers 0.38; the Qwen3 text encoder needs sentencepiece + protobuf.
     "diffusers>=0.38",
