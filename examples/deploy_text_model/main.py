@@ -13,7 +13,7 @@ import time
 import cortexgrid
 from dotenv import load_dotenv
 
-import model_gateway as mg
+import cortexgrid_infer as mg
 
 MODEL_ID = "hf:Qwen/Qwen2.5-0.5B-Instruct"
 POLL_INTERVAL_S = 10
@@ -60,7 +60,7 @@ def chat(model: mg.CompletingModel) -> None:
 
 def main() -> None:
     load_dotenv()
-    exp = cortexgrid.Experiment.init("model-gateway-examples")
+    exp = cortexgrid.Experiment.init("cortexgrid-infer-examples")
     print(f"run: {exp.run_name()}")
 
     try:

@@ -1,4 +1,4 @@
-# model-gateway examples
+# cortexgrid-infer examples
 #
 # Prerequisites:
 #   - `uv sync` at the repo root

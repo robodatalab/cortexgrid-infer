@@ -16,7 +16,7 @@ import cortexgrid
 import httpx
 from huggingface_hub import snapshot_download
 
-from model_gateway.core import (
+from cortexgrid_infer.core import (
     CompletingModel,
     Message,
     Tool,
@@ -27,10 +27,10 @@ from model_gateway.core import (
     register_status_provider,
     register_uploader,
 )
-from model_gateway.providers.huggingface_complete_serve import (
+from cortexgrid_infer.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
 )
-from model_gateway.utils import build_tool_map, normalize_tools, parse_hf_id, remove_hf_download_metadata
+from cortexgrid_infer.utils import build_tool_map, normalize_tools, parse_hf_id, remove_hf_download_metadata
 
 
 _tool_call_id_counter = itertools.count()

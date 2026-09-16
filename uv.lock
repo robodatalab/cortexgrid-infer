@@ -868,6 +868,50 @@ wheels = [
 ]
 
 [[package]]
+name = "cortexgrid-infer"
+version = "0.1.8"
+source = { editable = "." }
+dependencies = [
+    { name = "accelerate" },
+    { name = "anthropic" },
+    { name = "cortexgrid" },
+    { name = "diffusers" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "huggingface-hub" },
+    { name = "pillow" },
+    { name = "protobuf" },
+    { name = "python-dotenv" },
+    { name = "sentencepiece" },
+    { name = "torch" },
+    { name = "transformers" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "accelerate", specifier = ">=0.33" },
+    { name = "anthropic", specifier = ">=0.40.0" },
+    { name = "cortexgrid" },
+    { name = "diffusers", specifier = ">=0.38" },
+    { name = "fastapi", specifier = ">=0.110.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "huggingface-hub", specifier = ">=0.20.0" },
+    { name = "pillow", specifier = ">=10.0" },
+    { name = "protobuf", specifier = ">=4.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "sentencepiece", specifier = ">=0.2" },
+    { name = "torch", specifier = ">=2.0.0" },
+    { name = "transformers", specifier = ">=4.40.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "cryptography"
 version = "50.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2346,50 +2390,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/1e/0c/ca806be05530ffd01
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d3/e4/486d48d96fcb3957f2811e34d17fa21c7d3451eb4b41231832c9f05b6959/mlflow_tracing-3.16.0-py3-none-any.whl", hash = "sha256:383b920d5421f8f596a73bbc698f065ac62c4277146d2bdb2352096ec528bcb2", size = 1811849, upload-time = "2026-09-04T05:00:58.786Z" },
 ]
-
-[[package]]
-name = "model-gateway"
-version = "0.1.7"
-source = { editable = "." }
-dependencies = [
-    { name = "accelerate" },
-    { name = "anthropic" },
-    { name = "cortexgrid" },
-    { name = "diffusers" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "huggingface-hub" },
-    { name = "pillow" },
-    { name = "protobuf" },
-    { name = "python-dotenv" },
-    { name = "sentencepiece" },
-    { name = "torch" },
-    { name = "transformers" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "accelerate", specifier = ">=0.33" },
-    { name = "anthropic", specifier = ">=0.40.0" },
-    { name = "cortexgrid" },
-    { name = "diffusers", specifier = ">=0.38" },
-    { name = "fastapi", specifier = ">=0.110.0" },
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "huggingface-hub", specifier = ">=0.20.0" },
-    { name = "pillow", specifier = ">=10.0" },
-    { name = "protobuf", specifier = ">=4.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "sentencepiece", specifier = ">=0.2" },
-    { name = "torch", specifier = ">=2.0.0" },
-    { name = "transformers", specifier = ">=4.40.0" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "mpmath"

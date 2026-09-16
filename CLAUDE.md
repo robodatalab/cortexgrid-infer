@@ -1,4 +1,4 @@
-# RoboDataLab Model Gateway
+# RoboDataLab cortexgrid-infer
 
 Library for running inference on a wide range of models
 

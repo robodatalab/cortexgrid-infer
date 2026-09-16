@@ -1,4 +1,4 @@
-"""Tests for public interfaces in model_gateway.core."""
+"""Tests for public interfaces in cortexgrid_infer.core."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from functools import partial
 from typing import Any, Sequence
 
-from model_gateway.core import (
+from cortexgrid_infer.core import (
     CompletingModel,
     CompletionChunk,
     DeployedModel,

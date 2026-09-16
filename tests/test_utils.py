@@ -1,11 +1,11 @@
-"""Tests for public interfaces in model_gateway.utils."""
+"""Tests for public interfaces in cortexgrid_infer.utils."""
 
 from __future__ import annotations
 
 import unittest
 from functools import partial
 
-from model_gateway.utils import (
+from cortexgrid_infer.utils import (
     build_tool_map,
     function_to_tool_spec,
     normalize_tools,

@@ -1,7 +1,7 @@
 """HuggingFace image provider: deploys a diffusers pipeline via cortexgrid and
 clients it over HTTP.
 
-The image analogue of :mod:`model_gateway.providers.huggingface`. Model ids use
+The image analogue of :mod:`cortexgrid_infer.providers.huggingface`. Model ids use
 the ``hf-image:`` prefix (e.g. ``hf-image:black-forest-labs/FLUX.2-klein-base-4B``)
 so they don't collide with the ``hf:`` completion provider.
 """
@@ -18,7 +18,7 @@ import cortexgrid
 import httpx
 from huggingface_hub import snapshot_download
 
-from model_gateway.core import (
+from cortexgrid_infer.core import (
     GeneratedImage,
     GeneratingModel,
     register_deleter,
@@ -26,8 +26,8 @@ from model_gateway.core import (
     register_status_provider,
     register_uploader,
 )
-from model_gateway.providers.huggingface_image_serve import HuggingFaceImageDeployment
-from model_gateway.utils import parse_hf_id, remove_hf_download_metadata
+from cortexgrid_infer.providers.huggingface_image_serve import HuggingFaceImageDeployment
+from cortexgrid_infer.utils import parse_hf_id, remove_hf_download_metadata
 
 
 # `from_pretrained` reads the component subfolders + configs; it never touches the
