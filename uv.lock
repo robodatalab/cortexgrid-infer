@@ -397,7 +397,7 @@ wheels = [
 
 [[package]]
 name = "cortexgrid"
-version = "0.2.92"
+version = "0.2.93"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -417,9 +417,9 @@ dependencies = [
     { name = "setuptools" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/6f/f91c32115779069f06ccd12729810394460753206fbe6409029f08616b6d/cortexgrid-0.2.92.tar.gz", hash = "sha256:ed1f8a0abaeb977bf5446f62d6227e152a0570383a264bdebb8ebe4037e2d78e", size = 36643, upload-time = "2026-09-16T15:36:20.206Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ac/e0/eea35eaaa5f0a4e027700d347b020759b4c83da4e2c1e5ed33d32884ee77/cortexgrid-0.2.93.tar.gz", hash = "sha256:6b4588999092b9227c910095dccf6d1ec6c977794a624e8df0bdb4cc9e187549", size = 37216, upload-time = "2026-09-16T16:12:16.602Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d1/c8/f5a45e52c9385dbdf9f12007746843a515ca6427e0bf5b9fb2c77e594d0e/cortexgrid-0.2.92-py3-none-any.whl", hash = "sha256:7dc112f304c666e79e0a1dd46014266ca2f45d821510b40a596a4274789c1d2b", size = 44453, upload-time = "2026-09-16T15:36:18.852Z" },
+    { url = "https://files.pythonhosted.org/packages/7b/3c/01d99eb5cfad9e3ad3feb635a1cce99ae4e7cbdac4e13bc8b605b1611b7c/cortexgrid-0.2.93-py3-none-any.whl", hash = "sha256:b2d4ac398a7e120c9cde0a5a0ee967c421bc64d7e8d208e72a287ddde2727849", size = 45097, upload-time = "2026-09-16T16:12:15.357Z" },
 ]
 
 [[package]]
@@ -451,7 +451,7 @@ dev = [
 requires-dist = [
     { name = "accelerate", specifier = ">=0.33" },
     { name = "anthropic", specifier = ">=0.40.0" },
-    { name = "cortexgrid", specifier = ">=0.2.92" },
+    { name = "cortexgrid", specifier = ">=0.2.93" },
     { name = "diffusers", specifier = ">=0.38" },
     { name = "fastapi", specifier = ">=0.133" },
     { name = "httpx", specifier = ">=0.27.0" },

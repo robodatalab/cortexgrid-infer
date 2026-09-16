@@ -25,7 +25,7 @@ jobs:
         run: git config --global url."https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
         env:
           UV_TORCH_BACKEND: cpu
 
