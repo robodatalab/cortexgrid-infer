@@ -869,7 +869,7 @@ wheels = [
 
 [[package]]
 name = "cortexgrid-infer"
-version = "0.1.8"
+version = "0.1.10"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -898,7 +898,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.40.0" },
     { name = "cortexgrid" },
     { name = "diffusers", specifier = ">=0.38" },
-    { name = "fastapi", specifier = ">=0.110.0" },
+    { name = "fastapi", specifier = "==0.108.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "huggingface-hub", specifier = ">=0.20.0" },
     { name = "pillow", specifier = ">=10.0" },
@@ -1157,18 +1157,16 @@ wheels = [
 
 [[package]]
 name = "fastapi"
-version = "0.141.1"
+version = "0.108.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "annotated-doc" },
     { name = "pydantic" },
     { name = "starlette" },
     { name = "typing-extensions" },
-    { name = "typing-inspection" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8a/02/91e3416a8fdd715abb903a952a6bec7cdd8d14eed55d415fc8595524c319/fastapi-0.141.1.tar.gz", hash = "sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1", size = 425799, upload-time = "2026-07-29T17:18:05.568Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/0d/ec01761249b228f288b693a7ad6b2e695af521ca0f32dd09aef58890d9a4/fastapi-0.108.0.tar.gz", hash = "sha256:5056e504ac6395bf68493d71fcfc5352fdbd5fda6f88c21f6420d80d81163296", size = 11417797, upload-time = "2023-12-26T20:25:36.201Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cb/03/10388a42375ee7e4ac9b94eb2c5c569c8b5795e377e701c9ac3ad63de890/fastapi-0.141.1-py3-none-any.whl", hash = "sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3", size = 131954, upload-time = "2026-07-29T17:18:04.364Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/e0/d5d6482e992a1892f3a9a62f6a9154944ae5b276e7da1cf92faa02e3a107/fastapi-0.108.0-py3-none-any.whl", hash = "sha256:8c7bc6d315da963ee4cdb605557827071a9a7f95aeb8fcdd3bde48cdc8764dd7", size = 92045, upload-time = "2023-12-26T20:25:32.221Z" },
 ]
 
 [[package]]
@@ -4612,15 +4610,14 @@ wheels = [
 
 [[package]]
 name = "starlette"
-version = "1.6.0"
+version = "0.32.0.post1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b5/b4/205b0d5241d934e8add0c38aa924c4f9fb7330834ff11e5444db964ec3f9/starlette-1.6.0.tar.gz", hash = "sha256:d4e3ac5e546444960c710297a3c9fc3f7ebae1b7e963f3d36173b49da535be9b", size = 2716969, upload-time = "2026-08-08T18:27:57.512Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/06/a9/a42ef0fb5479e21738a03c0aa1078023a38c23198b049cb901eeda06cde0/starlette-0.32.0.post1.tar.gz", hash = "sha256:e54e2b7e2fb06dff9eac40133583f10dfa05913f5a85bf26f427c7a40a9a3d02", size = 2837480, upload-time = "2023-11-06T06:30:40.516Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c8/cb/6a6a47d5b464bd08695d254f3da6e7986cc70c9fa5d778eda57538edfe56/starlette-1.6.0-py3-none-any.whl", hash = "sha256:a86dd39d14bb45f85a3d18525215a9ef0cfd1f192ac793220e72598c90335f0c", size = 75969, upload-time = "2026-08-08T18:27:56.196Z" },
+    { url = "https://files.pythonhosted.org/packages/40/9e/6bfa6be40034fa04cc50e2a81d24a4e5b89279c688b51380d70ac31c0556/starlette-0.32.0.post1-py3-none-any.whl", hash = "sha256:cd0cb10ddb49313f609cedfac62c8c12e56c7314b66d89bb077ba228bada1b09", size = 70017, upload-time = "2023-11-06T06:30:37.537Z" },
 ]
 
 [[package]]
