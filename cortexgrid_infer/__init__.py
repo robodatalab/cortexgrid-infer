@@ -1,3 +1,5 @@
+from cortexgrid import ModelDeployFailed
+
 from cortexgrid_infer.core import (
     CompletionChunk,
     DeployedModel,
@@ -46,6 +48,7 @@ __all__ = [
     "ToolSpec",
     "complete",
     "deploy_model",
+    "ModelDeployFailed",
     "deployment_status",
     "upload_model",
     "delete_model",

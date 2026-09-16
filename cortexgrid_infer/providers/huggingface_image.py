@@ -27,6 +27,7 @@ from cortexgrid_infer.core import (
     register_uploader,
 )
 from cortexgrid_infer.providers.huggingface_image_serve import HuggingFaceImageDeployment
+from cortexgrid_infer.providers.serving import ensure_serving
 from cortexgrid_infer.utils import parse_hf_id, remove_hf_download_metadata
 
 
@@ -181,7 +182,9 @@ def upload_huggingface_image(model_id: str) -> str | None:
     )
 
 
-def deploy_huggingface_image(model_id: str) -> HuggingFaceImageModel | None:
+def deploy_huggingface_image(
+    model_id: str, timeout: float | None = None
+) -> HuggingFaceImageModel | None:
     if not model_id.startswith("hf-image:"):
         return None
     hf_id = model_id[len("hf-image:") :]
@@ -193,24 +196,8 @@ def deploy_huggingface_image(model_id: str) -> HuggingFaceImageModel | None:
             f"upload_model('{model_id}') and wait for phase 'ready' before deploying."
         )
 
-    existing = next(
-        (
-            d
-            for d in cortexgrid.list_deployed_models()
-            if d.family == family and d.suffix == suffix and d.run_name == run_name
-        ),
-        None,
-    )
-    if existing is not None:
-        url = existing.url
-    else:
-        deployment = cortexgrid.deploy_model(
-            family=family, suffix=suffix, run_name=run_name, wait=True, timeout=None
-        )
-        url = deployment.url
-
     return HuggingFaceImageModel(
-        url=url,
+        url=ensure_serving(family, suffix, run_name, timeout),
         model_id=model_id,
         family=family,
         suffix=suffix,

@@ -29,8 +29,10 @@ upload_model ──▶ [ registry: uploading ─▶ ready ] ──▶ deploy_mod
   machine. Only the model files are stored: HuggingFace's download bookkeeping
   (`.cache/huggingface/` inside the download folder) is dropped first. Returns a job
   id; poll until the model is `ready`.
-- **Deploy** schedules the model as a Ray Serve app and returns a client. It
-  requires the model to be registry-`ready` (raises otherwise).
+- **Deploy** blocks until the model is ready to serve and returns a client. It
+  requires the model to be registry-`ready` (raises otherwise), reuses a running
+  Ray Serve app, waits on one still coming up, and replaces a failed one. See
+  [Deploying](#deploying).
 - **Query** reports one combined phase across both lifecycles — registry while the
   weights upload, then serving once an app exists.
 - **Teardown**: `model.undeploy()` frees the GPU but keeps the weights (re-deploy is
@@ -60,8 +62,9 @@ while status is None or status.phase != "ready":
     time.sleep(10)
     status = mg.deployment_status(mid)
 
-# 3. Deploy — schedule the Ray Serve app; get a client back.
-model = mg.deploy_model(mid)
+# 3. Deploy — blocks until the Ray Serve app is running; get a client back.
+#    Raises mg.ModelDeployFailed if the deploy fails, TimeoutError after 30 min.
+model = mg.deploy_model(mid, timeout=1800)
 
 # 4. Inference.
 async def run():
@@ -98,6 +101,41 @@ async for chunk in mg.complete(model, messages):
     ...
 ```
 
+## Deploying
+
+`deploy_model` is the one call that makes a cluster model servable. It reads the
+model's current Ray Serve app and does what that state needs:
+
+| Serving phase | `deploy_model` |
+|---|---|
+| `running` | returns a client straight away |
+| `not_started`, `deploying`, `unhealthy` | waits for `running`; it never re-sends the spec, which would restart a build in progress |
+| no app yet, `failed`, `deleting` | deploys afresh; cortexgrid removes a failed app first, so the retry really restarts it |
+
+It raises `ModelDeployFailed` when the app fails to deploy, with Ray's message
+(including the replica's traceback), and `TimeoutError` when the model is not
+running within `timeout` seconds. `timeout=None` (the default) waits indefinitely,
+so a model waiting for a free GPU blocks forever. `ModelDeployFailed` is
+re-exported from cortexgrid and subclasses `RuntimeError`.
+
+```python
+try:
+    model = mg.deploy_model(mid, timeout=3600)
+except mg.ModelDeployFailed as e:
+    log.error("deploying %s failed: %s", mid, e)
+    raise
+```
+
+A failed app is left in place, so its phase and message stay visible (e.g. in the
+cortexgrid UI) until the next `deploy_model` replaces it. There is no need to tear
+it down yourself. Retrying only helps with transient failures; a serve-app that
+fails deterministically fails again until it is fixed and re-uploaded.
+
+To follow a deploy without blocking - say, a status endpoint polled while another
+thread deploys - poll `deployment_status(id)` instead (see
+[Status phases](#status-phases)). Hosted models (`Anthropic/`) have nothing to
+deploy: `deploy_model` returns immediately and ignores `timeout`.
+
 ## API
 
 All exported from `cortexgrid_infer.*`. Each generic entry point routes by model-id
@@ -107,7 +145,7 @@ prefix to the provider that registered for it.
 |---|---|
 | `upload_model(id) -> str \| None` | Start ingesting the weights into the registry (a cluster job); returns its job id, or `None` if already staged or nothing to stage (hosted models). |
 | `deployment_status(id) -> status \| None` | Combined phase: the registry lifecycle (`uploading`/`ready`/`upload_failed`/`broken`) while staging, then the serving lifecycle (`deploying`/`running`/`failed`/…) once a Serve app exists. `None` for hosted models. |
-| `deploy_model(id) -> DeployedModel` | Schedule the model (must be registry-`ready`) and return a client. Idempotent — reuses a running deployment. |
+| `deploy_model(id, timeout=None) -> DeployedModel` | Return a client once the model is ready to serve (must be registry-`ready`). Blocks; see [Deploying](#deploying). Raises `ModelDeployFailed` when the deploy fails, `TimeoutError` past `timeout` seconds (`None` waits indefinitely). |
 | `complete(model, messages, tools=None, max_new_tokens=2048, temperature=0.7, **kw)` | Async stream of `CompletionChunk` for a `CompletingModel` (`hf:`, `Anthropic/`). |
 | `generate(model, prompt, *, image=None, **kw) -> GeneratedImage` | One image from a `GeneratingModel` (`hf-image:`). Pass `image=` bytes for img2img. |
 | `model.undeploy()` | Free the GPU (tear down the Serve app); weights stay registered. |
@@ -115,7 +153,12 @@ prefix to the provider that registered for it.
 
 Extending to a new provider means registering four prefix handlers:
 `register_provider` (deploy), `register_uploader` (upload), `register_status_provider`
-(status), `register_deleter` (cleanup).
+(status), `register_deleter` (cleanup). A deploy factory is called as
+`factory(model_id, timeout)` and returns a model that is ready to serve, or `None`
+to pass the id to the next provider. A cluster-backed provider gets the behaviour in
+[Deploying](#deploying) from
+`cortexgrid_infer.providers.serving.ensure_serving(family, suffix, run_name, timeout)`,
+which returns the Serve app's URL once it is running.
 
 ### Status phases
 

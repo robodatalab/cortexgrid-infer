@@ -100,23 +100,33 @@ class GeneratingModel(DeployedModel):
     ) -> GeneratedImage: ...
 
 
-_providers: list[tuple[str, Callable[[str], DeployedModel | None]]] = []
+_providers: list[tuple[str, Callable[[str, float | None], DeployedModel | None]]] = []
 
 T = TypeVar("T", bound=DeployedModel)
 
 
 def register_provider(
-    prefix: str, factory: Callable[[str], DeployedModel | None]
+    prefix: str, factory: Callable[[str, float | None], DeployedModel | None]
 ) -> None:
-    """Register a model provider that handles model IDs starting with *prefix*."""
+    """Register a model provider that handles model IDs starting with *prefix*.
+
+    The factory is called with the model id and `deploy_model`'s timeout, and
+    returns a model ready to serve, or None to pass the id to the next provider."""
     _providers.append((prefix, factory))
 
 
-def deploy_model(model_id: str) -> DeployedModel:
+def deploy_model(model_id: str, timeout: float | None = None) -> DeployedModel:
+    """Return a client for *model_id* once the model is ready to serve.
+
+    Blocks until then. A cluster-backed model reuses its Serve app when it is
+    running, waits on one still coming up, and otherwise deploys afresh - a
+    failed app is torn down first. Raises ``ModelDeployFailed`` when the deploy
+    fails, and TimeoutError when the model is not serving within *timeout*
+    seconds (None waits indefinitely). Hosted-API models return immediately."""
     for prefix, factory in _providers:
         if not model_id.startswith(prefix):
             continue
-        model = factory(model_id)
+        model = factory(model_id, timeout)
         if model is None:
             continue
         return model

@@ -173,14 +173,6 @@ class TestHuggingFaceCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
 # --- deploy_huggingface flow ---
 
 
-class _FakeDeployment:
-    def __init__(self, family: str, suffix: str, run_name: str, url: str) -> None:
-        self.family = family
-        self.suffix = suffix
-        self.run_name = run_name
-        self.url = url
-
-
 class _FakeExperiment:
     def __init__(self, run_name: str) -> None:
         self._run_name = run_name
@@ -194,28 +186,23 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
         self.assertIsNone(deploy_huggingface("openai:gpt-4"))
         self.assertIsNone(deploy_huggingface("Qwen/Qwen2-2.5B-Instruct"))
 
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.deploy_model")
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.list_deployed_models")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.ensure_serving")
     @mock.patch(
         "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,
     )
     @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
-    def test_deploys_when_registry_ready(
+    def test_serves_registry_ready_model_within_timeout(
         self,
         mock_experiment: mock.Mock,
         mock_registry: mock.Mock,
-        mock_list_deployed: mock.Mock,
-        mock_deploy: mock.Mock,
+        mock_ensure_serving: mock.Mock,
     ):
         mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
         mock_registry.return_value = SimpleNamespace(phase="ready")
-        mock_list_deployed.return_value = []
-        mock_deploy.return_value = _FakeDeployment(
-            "Qwen2-2.5B", "Instruct", "run-1", "http://h/r/Qwen2-2.5B/Instruct/run-1"
-        )
+        mock_ensure_serving.return_value = "http://h/r/Qwen2-2.5B/Instruct/run-1"
 
-        model = deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
+        model = deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct", timeout=120.0)
 
         assert model is not None
         self.assertEqual(model.url, "http://h/r/Qwen2-2.5B/Instruct/run-1")
@@ -224,45 +211,11 @@ class TestDeployHuggingFaceFlow(unittest.TestCase):
             (model.family, model.suffix, model.run_name),
             ("Qwen2-2.5B", "Instruct", "run-1"),
         )
-        mock_deploy.assert_called_once()
-        self.assertEqual(
-            mock_deploy.call_args.kwargs,
-            {
-                "family": "Qwen2-2.5B",
-                "suffix": "Instruct",
-                "run_name": "run-1",
-                "wait": True,
-                "timeout": None,
-            },
+        mock_ensure_serving.assert_called_once_with(
+            "Qwen2-2.5B", "Instruct", "run-1", 120.0
         )
 
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.deploy_model")
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.list_deployed_models")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
-    def test_reuses_existing_deployment(
-        self,
-        mock_experiment: mock.Mock,
-        mock_registry: mock.Mock,
-        mock_list_deployed: mock.Mock,
-        mock_deploy: mock.Mock,
-    ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_registry.return_value = SimpleNamespace(phase="ready")
-        mock_list_deployed.return_value = [
-            _FakeDeployment("Qwen2-2.5B", "Instruct", "run-1", "http://existing/url")
-        ]
-
-        model = deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
-
-        assert model is not None
-        self.assertEqual(model.url, "http://existing/url")
-        mock_deploy.assert_not_called()
-
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.deploy_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.ensure_serving")
     @mock.patch(
         "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
         create=True,

@@ -30,6 +30,7 @@ from cortexgrid_infer.core import (
 from cortexgrid_infer.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
 )
+from cortexgrid_infer.providers.serving import ensure_serving
 from cortexgrid_infer.utils import build_tool_map, normalize_tools, parse_hf_id, remove_hf_download_metadata
 
 
@@ -239,7 +240,9 @@ def upload_huggingface(model_id: str) -> str | None:
     )
 
 
-def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
+def deploy_huggingface(
+    model_id: str, timeout: float | None = None
+) -> HuggingFaceCompletingModel | None:
     if not model_id.startswith("hf:"):
         return None
     hf_id = model_id[len("hf:") :]
@@ -254,28 +257,8 @@ def deploy_huggingface(model_id: str) -> HuggingFaceCompletingModel | None:
             f"upload_model('{model_id}') and wait for phase 'ready' before deploying."
         )
 
-    existing = next(
-        (
-            d
-            for d in cortexgrid.list_deployed_models()
-            if d.family == family and d.suffix == suffix and d.run_name == run_name
-        ),
-        None,
-    )
-    if existing is not None:
-        url = existing.url
-    else:
-        deployment = cortexgrid.deploy_model(
-            family=family,
-            suffix=suffix,
-            run_name=run_name,
-            wait=True,
-            timeout=None,
-        )
-        url = deployment.url
-
     return HuggingFaceCompletingModel(
-        url=url,
+        url=ensure_serving(family, suffix, run_name, timeout),
         model_id=model_id,
         family=family,
         suffix=suffix,

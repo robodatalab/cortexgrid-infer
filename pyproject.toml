@@ -7,7 +7,9 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
-    "cortexgrid",
+    # wait_for_model_serving / ModelDeployFailed, and deploy_model clearing a
+    # failed Serve app.
+    "cortexgrid>=0.2.92",
     "torch>=2.0.0",
     "transformers>=4.40.0",
     "huggingface_hub>=0.20.0",

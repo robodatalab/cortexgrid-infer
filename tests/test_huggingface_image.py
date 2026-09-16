@@ -116,14 +116,6 @@ class TestHuggingFaceImageModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(base64.b64decode(sent), b"reference-png")
 
 
-class _FakeDeployment:
-    def __init__(self, family: str, suffix: str, run_name: str, url: str) -> None:
-        self.family = family
-        self.suffix = suffix
-        self.run_name = run_name
-        self.url = url
-
-
 class _FakeSavedModel:
     """Stands in for a cortexgrid SavedModel record from ``list_models()``."""
 
@@ -147,80 +139,32 @@ class TestDeployHuggingFaceImageFlow(unittest.TestCase):
         self.assertIsNone(deploy_huggingface_image("hf:Qwen/Qwen2-Instruct"))
         self.assertIsNone(deploy_huggingface_image("openai:gpt-4"))
 
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.deploy_model")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_deployed_models"
-    )
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.ensure_serving")
     @mock.patch(
         "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
         create=True,
     )
-    def test_deploys_when_registry_ready(
+    def test_serves_newest_ready_version_within_timeout(
         self,
         mock_list_models: mock.Mock,
-        mock_list_deployed: mock.Mock,
-        mock_deploy: mock.Mock,
+        mock_ensure_serving: mock.Mock,
     ):
         mock_list_models.return_value = [
             _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
         ]
-        mock_list_deployed.return_value = []
-        mock_deploy.return_value = _FakeDeployment(
-            "FLUX.2-klein-base", "4B", "run-1",
-            "http://h/r/FLUX.2-klein-base/4B/run-1",
-        )
+        mock_ensure_serving.return_value = "http://h/r/FLUX.2-klein-base/4B/run-1"
 
         model = deploy_huggingface_image(
-            "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
+            "hf-image:black-forest-labs/FLUX.2-klein-base-4B", timeout=120.0
         )
 
         assert model is not None
         self.assertEqual(model.url, "http://h/r/FLUX.2-klein-base/4B/run-1")
-        self.assertEqual(
-            (model.family, model.suffix, model.run_name),
-            ("FLUX.2-klein-base", "4B", "run-1"),
-        )
-        self.assertEqual(
-            mock_deploy.call_args.kwargs,
-            {
-                "family": "FLUX.2-klein-base",
-                "suffix": "4B",
-                "run_name": "run-1",
-                "wait": True,
-                "timeout": None,
-            },
+        mock_ensure_serving.assert_called_once_with(
+            "FLUX.2-klein-base", "4B", "run-1", 120.0
         )
 
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.deploy_model")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_deployed_models"
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
-    def test_reuses_existing_deployment(
-        self,
-        mock_list_models: mock.Mock,
-        mock_list_deployed: mock.Mock,
-        mock_deploy: mock.Mock,
-    ):
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
-        ]
-        mock_list_deployed.return_value = [
-            _FakeDeployment("FLUX.2-klein-base", "4B", "run-1", "http://existing/url")
-        ]
-
-        model = deploy_huggingface_image(
-            "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
-        )
-
-        assert model is not None
-        self.assertEqual(model.url, "http://existing/url")
-        mock_deploy.assert_not_called()
-
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.deploy_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.ensure_serving")
     @mock.patch(
         "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
         create=True,
@@ -351,10 +295,7 @@ class TestUndeploy(unittest.TestCase):
         HuggingFaceImageModel(url="u", model_id="hf-image:x").undeploy()
         mock_undeploy.assert_not_called()
 
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.deploy_model")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_deployed_models"
-    )
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.ensure_serving", return_value="http://existing/url")
     @mock.patch(
         "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
         create=True,
@@ -362,14 +303,10 @@ class TestUndeploy(unittest.TestCase):
     def test_deployed_model_carries_identifiers(
         self,
         mock_list_models: mock.Mock,
-        mock_list_deployed: mock.Mock,
-        mock_deploy: mock.Mock,
+        _mock_ensure_serving: mock.Mock,
     ):
         mock_list_models.return_value = [
             _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
-        ]
-        mock_list_deployed.return_value = [
-            _FakeDeployment("FLUX.2-klein-base", "4B", "run-1", "http://existing/url")
         ]
 
         model = deploy_huggingface_image(
