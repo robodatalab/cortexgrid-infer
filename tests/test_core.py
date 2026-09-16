@@ -22,7 +22,7 @@ from cortexgrid_infer.core import (
 
 
 class _StubModel(CompletingModel):
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, timeout: float | None = None) -> None:
         self._model_id = model_id
 
     @property
@@ -111,7 +111,7 @@ class TestProviderRegistry(unittest.TestCase):
 class _FakeDeployedModel(DeployedModel):
     """Fake model that derives from DeployedModel but not CompletingModel."""
 
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, timeout: float | None = None) -> None:
         self._model_id = model_id
 
     @property
@@ -122,7 +122,7 @@ class _FakeDeployedModel(DeployedModel):
 class _FakeCompletingModel(CompletingModel):
     """Fake model that derives from CompletingModel."""
 
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, timeout: float | None = None) -> None:
         self._model_id = model_id
 
     @property
@@ -172,14 +172,14 @@ class TestDeployModel(unittest.TestCase):
         self.assertEqual(model.name, "fake/my-model")
 
     def test_factory_returning_none_skips_to_next_provider(self):
-        register_provider("fake/", lambda _id: None)
+        register_provider("fake/", lambda _id, _timeout: None)
         register_provider("fake/", _FakeCompletingModel)
         model = deploy_model("fake/my-model")
         self.assertIsInstance(model, _FakeCompletingModel)
 
     def test_all_matching_factories_return_none_raises_value_error(self):
-        register_provider("fake/", lambda _id: None)
-        register_provider("fake/", lambda _id: None)
+        register_provider("fake/", lambda _id, _timeout: None)
+        register_provider("fake/", lambda _id, _timeout: None)
         with self.assertRaises(ValueError):
             deploy_model("fake/my-model")
 
@@ -205,13 +205,25 @@ class TestDeployModel(unittest.TestCase):
     def test_factory_receives_full_model_id(self):
         captured: list[str] = []
 
-        def factory(model_id: str) -> _FakeCompletingModel:
+        def factory(model_id: str, timeout: float | None) -> _FakeCompletingModel:
             captured.append(model_id)
             return _FakeCompletingModel(model_id)
 
         register_provider("fake/", factory)
         deploy_model("fake/provider/some-model-name")
         self.assertEqual(captured, ["fake/provider/some-model-name"])
+
+    def test_factory_receives_timeout(self):
+        captured: list[float | None] = []
+
+        def factory(model_id: str, timeout: float | None) -> _FakeCompletingModel:
+            captured.append(timeout)
+            return _FakeCompletingModel(model_id)
+
+        register_provider("fake/", factory)
+        deploy_model("fake/my-model")
+        deploy_model("fake/my-model", timeout=120.0)
+        self.assertEqual(captured, [None, 120.0])
 
     def test_prefix_matches_exactly_at_start(self):
         register_provider("fake/", _FakeCompletingModel)

@@ -173,7 +173,10 @@ def _is_valid_anthropic_model(model_id: str) -> bool:
         return False
 
 
-def deploy_anthropic(model_id: str) -> AnthropicModel | None:
+def deploy_anthropic(
+    model_id: str, timeout: float | None = None
+) -> AnthropicModel | None:
+    # timeout is unused: a hosted API has nothing to schedule or wait for.
     load_dotenv()
     actual_model_id = model_id.removeprefix(_MODEL_PROVIDER_PREFIX)
     if not _is_valid_anthropic_model(actual_model_id):
