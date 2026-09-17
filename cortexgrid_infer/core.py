@@ -167,7 +167,7 @@ def deployment_status(model_id: str) -> Any:
 # Uploaders mirror deploy/status providers: a prefix -> a function that STARTS an
 # ingest of the model's weights into the cortexgrid registry and returns the id of
 # the background job doing it, or None when there is nothing to upload (already
-# registered, or a hosted-API model with no weights). This is deliberately split
+# imported, or a hosted-API model with no weights). This is deliberately split
 # from deploy: a model must be uploaded (registry phase `ready`) before
 # `deploy_model` can schedule it, and the upload runs on the cluster - not the
 # caller's machine - so large weights never round-trip through the client.
@@ -182,9 +182,11 @@ def register_uploader(prefix: str, fn: Callable[[str], str | None]) -> None:
 def upload_model(model_id: str) -> str | None:
     """Start uploading *model_id*'s weights into the cortexgrid registry, returning
     the id of the background job doing it, or None if nothing needs uploading
-    (already registered, or a hosted-API model with no weights to stage).
+    (already imported, or a hosted-API model with no weights to stage).
 
-    The upload runs on the cluster, not the caller's machine. Poll its progress
+    Call it on every run: an already-imported model uploads no weights, but has its
+    serve code re-bundled if it changed and tags the run with the model. The upload
+    runs on the cluster, not the caller's machine. Poll its progress
     with ``deployment_status(model_id)`` (registry phase `uploading -> ready`);
     once `ready`, call ``deploy_model(model_id)``."""
     for prefix, fn in _uploaders:

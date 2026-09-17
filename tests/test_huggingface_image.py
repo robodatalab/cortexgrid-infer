@@ -4,36 +4,23 @@ from __future__ import annotations
 
 import base64
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+import cortexgrid
+
 from cortexgrid_infer.providers.huggingface_image import (
     HuggingFaceImageModel,
-    _ingest_huggingface_image,
+    _import_huggingface_image,
     delete_huggingface_image,
     deploy_huggingface_image,
+    image_deployment_status,
     upload_huggingface_image,
 )
 from cortexgrid_infer.providers.huggingface_image_serve import (
     HuggingFaceImageDeployment,
 )
-
-
-def _fake_snapshot_download(*, local_dir: str, **_kwargs: Any) -> None:
-    """Lay out what `snapshot_download(local_dir=...)` writes: the model files
-    plus HuggingFace's download bookkeeping under `.cache/huggingface/`."""
-    root = Path(local_dir)
-    (root / "config.json").write_text("{}")
-    metadata = root / ".cache" / "huggingface" / "download" / "config.json.metadata"
-    metadata.parent.mkdir(parents=True)
-    metadata.write_text("etag")
-
-
-def _files_under(local_dir: str) -> set[str]:
-    root = Path(local_dir)
-    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
 
 
 class _FakeResponse:
@@ -116,70 +103,43 @@ class TestHuggingFaceImageModelGenerate(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(base64.b64decode(sent), b"reference-png")
 
 
-class _FakeSavedModel:
-    """Stands in for a cortexgrid SavedModel record from ``list_models()``."""
-
-    def __init__(
-        self,
-        family: str,
-        suffix: str,
-        run_name: str,
-        phase: str,
-        created_at: str = "2026-01-01T00:00:00+00:00",
-    ) -> None:
-        self.family = family
-        self.suffix = suffix
-        self.run_name = run_name
-        self.phase = phase
-        self.created_at = created_at
-
-
 class TestDeployHuggingFaceImageFlow(unittest.TestCase):
     def test_returns_none_for_non_hf_image_prefix(self):
         self.assertIsNone(deploy_huggingface_image("hf:Qwen/Qwen2-Instruct"))
         self.assertIsNone(deploy_huggingface_image("openai:gpt-4"))
 
     @mock.patch("cortexgrid_infer.providers.huggingface_image.ensure_serving")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
-    def test_serves_newest_ready_version_within_timeout(
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
+    def test_serves_imported_model_within_timeout(
         self,
-        mock_list_models: mock.Mock,
+        mock_registry: mock.Mock,
         mock_ensure_serving: mock.Mock,
     ):
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
-        ]
-        mock_ensure_serving.return_value = "http://h/r/FLUX.2-klein-base/4B/run-1"
+        mock_registry.return_value = SimpleNamespace(phase="ready")
+        mock_ensure_serving.return_value = "http://h/r/FLUX.2-klein-base/4B/imported"
 
         model = deploy_huggingface_image(
             "hf-image:black-forest-labs/FLUX.2-klein-base-4B", timeout=120.0
         )
 
         assert model is not None
-        self.assertEqual(model.url, "http://h/r/FLUX.2-klein-base/4B/run-1")
+        self.assertEqual(model.url, "http://h/r/FLUX.2-klein-base/4B/imported")
+        mock_registry.assert_called_once_with(
+            "FLUX.2-klein-base", "4B", cortexgrid.IMPORTED
+        )
         mock_ensure_serving.assert_called_once_with(
-            "FLUX.2-klein-base", "4B", "run-1", 120.0
+            "FLUX.2-klein-base", "4B", cortexgrid.IMPORTED, 120.0
         )
 
     @mock.patch("cortexgrid_infer.providers.huggingface_image.ensure_serving")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
     def test_raises_when_not_registry_ready(
         self,
-        mock_list_models: mock.Mock,
+        mock_registry: mock.Mock,
         mock_deploy: mock.Mock,
     ):
-        # No versions at all, or only a still-uploading one: nothing ready to deploy.
-        for versions in (
-            [],
-            [_FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "uploading")],
-        ):
-            mock_list_models.return_value = versions
+        for status in (None, SimpleNamespace(phase="uploading")):
+            mock_registry.return_value = status
             with self.assertRaises(RuntimeError):
                 deploy_huggingface_image(
                     "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
@@ -192,92 +152,108 @@ class TestUploadHuggingFaceImage(unittest.TestCase):
         self.assertIsNone(upload_huggingface_image("hf:Qwen/Qwen2-Instruct"))
 
     @mock.patch.dict("os.environ", {"HF_TOKEN": "tok"})
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.remote", create=True)
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
-    def test_submits_remote_ingest_when_absent(
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.remote")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
+    def test_submits_remote_import_when_absent_or_failed(
         self,
-        mock_list_models: mock.Mock,
+        mock_registry: mock.Mock,
         mock_remote: mock.Mock,
+        mock_import: mock.Mock,
     ):
-        mock_list_models.return_value = []
         mock_remote.return_value = "job-1"
+        for status in (
+            None,
+            SimpleNamespace(phase="upload_failed"),
+            SimpleNamespace(phase="broken"),
+        ):
+            mock_registry.return_value = status
+            mock_remote.reset_mock()
 
-        job = upload_huggingface_image(
-            "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
-        )
-
-        self.assertEqual(job, "job-1")
-        mock_remote.assert_called_once()
-        args = mock_remote.call_args.args
-        self.assertIs(args[0], _ingest_huggingface_image)
-        self.assertEqual(
-            args[1:],
-            ("black-forest-labs/FLUX.2-klein-base-4B", "FLUX.2-klein-base", "4B", "tok"),
-        )
-        self.assertEqual(mock_remote.call_args.kwargs, {"num_gpus": 0, "num_cpus": 2})
-
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.remote", create=True)
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
-    def test_skips_when_already_registered(
-        self,
-        mock_list_models: mock.Mock,
-        mock_remote: mock.Mock,
-    ):
-        # Registered under some (possibly older) run: never re-ingest.
-        for phase in ("uploading", "ready"):
-            mock_list_models.return_value = [
-                _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", phase)
-            ]
-            self.assertIsNone(
-                upload_huggingface_image(
-                    "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
-                )
+            job = upload_huggingface_image(
+                "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
             )
+
+            self.assertEqual(job, "job-1")
+            mock_remote.assert_called_once_with(
+                _import_huggingface_image,
+                "black-forest-labs/FLUX.2-klein-base-4B",
+                "FLUX.2-klein-base",
+                "4B",
+                "tok",
+                num_gpus=0,
+                num_cpus=2,
+            )
+        mock_registry.assert_called_with("FLUX.2-klein-base", "4B", cortexgrid.IMPORTED)
+        mock_import.assert_not_called()
+
+    @mock.patch("cortexgrid_infer.utils.snapshot_download")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.remote")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
+    def test_imports_in_process_when_ready(
+        self,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+        mock_import: mock.Mock,
+        mock_snapshot: mock.Mock,
+    ):
+        # Every run calls import_model, so it gets its tag and a re-bundle of
+        # changed serve code - without a cluster job or a download.
+        mock_registry.return_value = SimpleNamespace(phase="ready")
+
+        self.assertIsNone(
+            upload_huggingface_image("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
+        )
+
         mock_remote.assert_not_called()
+        mock_import.assert_called_once()
+        self.assertIs(mock_import.call_args.args[1], HuggingFaceImageDeployment)
+        self.assertEqual(
+            mock_import.call_args.kwargs, {"family": "FLUX.2-klein-base", "suffix": "4B"}
+        )
+        mock_snapshot.assert_not_called()
 
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.save_model")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.snapshot_download",
-        side_effect=_fake_snapshot_download,
-    )
-    def test_ingest_does_not_save_hf_download_metadata(
-        self, _mock_snapshot: mock.Mock, mock_save: mock.Mock
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.remote")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
+    def test_skips_while_another_process_uploads(
+        self,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+        mock_import: mock.Mock,
     ):
-        saved: list[set[str]] = []
-        mock_save.side_effect = lambda d, *_a, **_k: saved.append(_files_under(d))
+        mock_registry.return_value = SimpleNamespace(phase="uploading")
+        self.assertIsNone(
+            upload_huggingface_image("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
+        )
+        mock_remote.assert_not_called()
+        mock_import.assert_not_called()
 
-        _ingest_huggingface_image(
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.utils.snapshot_download")
+    def test_import_downloads_only_when_source_is_called(
+        self, mock_snapshot: mock.Mock, mock_import: mock.Mock
+    ):
+        _import_huggingface_image(
             "black-forest-labs/FLUX.2-klein-base-4B", "FLUX.2-klein-base", "4B", "tok"
         )
 
-        self.assertEqual(saved, [{"config.json"}])
-
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.save_model")
-    @mock.patch("cortexgrid_infer.providers.huggingface_image.snapshot_download")
-    def test_ingest_downloads_and_saves(
-        self, mock_snapshot: mock.Mock, mock_save: mock.Mock
-    ):
-        _ingest_huggingface_image(
-            "black-forest-labs/FLUX.2-klein-base-4B", "FLUX.2-klein-base", "4B", "tok"
+        mock_snapshot.assert_not_called()
+        mock_import.assert_called_once()
+        self.assertIs(mock_import.call_args.args[1], HuggingFaceImageDeployment)
+        self.assertEqual(
+            mock_import.call_args.kwargs, {"family": "FLUX.2-klein-base", "suffix": "4B"}
         )
+
+        mock_import.call_args.args[0]()
         mock_snapshot.assert_called_once()
         self.assertEqual(
             mock_snapshot.call_args.kwargs["repo_id"],
             "black-forest-labs/FLUX.2-klein-base-4B",
         )
         self.assertEqual(mock_snapshot.call_args.kwargs["token"], "tok")
-        self.assertIn("ignore_patterns", mock_snapshot.call_args.kwargs)
-        mock_save.assert_called_once()
-        self.assertIs(mock_save.call_args.args[1], HuggingFaceImageDeployment)
-        self.assertEqual(
-            mock_save.call_args.kwargs, {"family": "FLUX.2-klein-base", "suffix": "4B"}
-        )
+        self.assertIn("*.md", mock_snapshot.call_args.kwargs["ignore_patterns"])
 
 
 class TestUndeploy(unittest.TestCase):
@@ -296,18 +272,13 @@ class TestUndeploy(unittest.TestCase):
         mock_undeploy.assert_not_called()
 
     @mock.patch("cortexgrid_infer.providers.huggingface_image.ensure_serving", return_value="http://existing/url")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
     def test_deployed_model_carries_identifiers(
         self,
-        mock_list_models: mock.Mock,
+        mock_registry: mock.Mock,
         _mock_ensure_serving: mock.Mock,
     ):
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
-        ]
+        mock_registry.return_value = SimpleNamespace(phase="ready")
 
         model = deploy_huggingface_image(
             "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
@@ -316,97 +287,56 @@ class TestUndeploy(unittest.TestCase):
         assert model is not None
         self.assertEqual(
             (model.family, model.suffix, model.run_name),
-            ("FLUX.2-klein-base", "4B", "run-1"),
+            ("FLUX.2-klein-base", "4B", cortexgrid.IMPORTED),
         )
 
 
 class TestImageDeploymentStatus(unittest.TestCase):
     def test_returns_none_for_non_hf_image_prefix(self):
-        from cortexgrid_infer.providers.huggingface_image import image_deployment_status
         self.assertIsNone(image_deployment_status("hf:Qwen/Qwen2-Instruct"))
 
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.model_serving_status",
-        create=True,
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_serving_status")
     def test_reports_serving_status_once_deployed(
         self,
-        mock_list_models: mock.Mock,
         mock_serving: mock.Mock,
         mock_registry: mock.Mock,
     ):
-        from cortexgrid_infer.providers.huggingface_image import image_deployment_status
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
-        ]
         mock_serving.return_value = SimpleNamespace(phase="running")
         result = image_deployment_status(
             "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
         )
         self.assertEqual(result.phase, "running")
-        mock_serving.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+        mock_serving.assert_called_once_with(
+            "FLUX.2-klein-base", "4B", cortexgrid.IMPORTED
+        )
         mock_registry.assert_not_called()
 
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.model_serving_status",
-        create=True,
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_serving_status")
     def test_falls_back_to_registry_status_before_deploy(
         self,
-        mock_list_models: mock.Mock,
         mock_serving: mock.Mock,
         mock_registry: mock.Mock,
     ):
-        from cortexgrid_infer.providers.huggingface_image import image_deployment_status
-        # No ready version yet: report the newest (in-flight) version's registry phase.
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "uploading")
-        ]
+        mock_serving.return_value = SimpleNamespace(phase="not_deployed")
         mock_registry.return_value = SimpleNamespace(phase="uploading")
         result = image_deployment_status(
             "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
         )
         self.assertEqual(result.phase, "uploading")
-        mock_serving.assert_not_called()
+        mock_registry.assert_called_once_with(
+            "FLUX.2-klein-base", "4B", cortexgrid.IMPORTED
+        )
 
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.model_serving_status",
-        create=True,
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_registry_status")
+    @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.model_serving_status")
     def test_core_dispatch_routes_hf_image(
         self,
-        mock_list_models: mock.Mock,
         mock_serving: mock.Mock,
         mock_registry: mock.Mock,
     ):
         import cortexgrid_infer
-        mock_list_models.return_value = [
-            _FakeSavedModel("Model", "4B", "run-1", "ready")
-        ]
         mock_serving.return_value = SimpleNamespace(phase="running")
         result = cortexgrid_infer.deployment_status("hf-image:org/Model-4B")
         self.assertEqual(result.phase, "running")
@@ -422,41 +352,31 @@ class TestDeleteHuggingFaceImage(unittest.TestCase):
 
     @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.delete_model")
     @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.undeploy_model")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
     def test_undeploys_then_deletes(
         self,
-        mock_list_models: mock.Mock,
         mock_undeploy: mock.Mock,
         mock_delete: mock.Mock,
     ):
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
-        ]
         delete_huggingface_image("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
-        mock_undeploy.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
-        mock_delete.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+        mock_undeploy.assert_called_once_with(
+            "FLUX.2-klein-base", "4B", cortexgrid.IMPORTED
+        )
+        mock_delete.assert_called_once_with(
+            "FLUX.2-klein-base", "4B", cortexgrid.IMPORTED
+        )
 
     @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.delete_model")
     @mock.patch("cortexgrid_infer.providers.huggingface_image.cortexgrid.undeploy_model")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_image.cortexgrid.list_models",
-        create=True,
-    )
     def test_core_dispatch_routes_hf_image(
         self,
-        mock_list_models: mock.Mock,
         mock_undeploy: mock.Mock,
         mock_delete: mock.Mock,
     ):
         import cortexgrid_infer
-        mock_list_models.return_value = [
-            _FakeSavedModel("FLUX.2-klein-base", "4B", "run-1", "ready")
-        ]
         cortexgrid_infer.delete_model("hf-image:black-forest-labs/FLUX.2-klein-base-4B")
-        mock_delete.assert_called_once_with("FLUX.2-klein-base", "4B", "run-1")
+        mock_delete.assert_called_once_with(
+            "FLUX.2-klein-base", "4B", cortexgrid.IMPORTED
+        )
 
 
 if __name__ == "__main__":
