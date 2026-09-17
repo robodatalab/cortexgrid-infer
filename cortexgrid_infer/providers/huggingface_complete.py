@@ -14,7 +14,6 @@ from typing import Any, Callable, Sequence
 
 import cortexgrid
 import httpx
-from huggingface_hub import snapshot_download
 
 from cortexgrid_infer.core import (
     CompletingModel,
@@ -31,7 +30,7 @@ from cortexgrid_infer.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
 )
 from cortexgrid_infer.providers.serving import ensure_serving
-from cortexgrid_infer.utils import build_tool_map, normalize_tools, parse_hf_id, remove_hf_download_metadata
+from cortexgrid_infer.utils import build_tool_map, download_hf_snapshot, normalize_tools, parse_hf_id
 
 
 _tool_call_id_counter = itertools.count()
@@ -195,46 +194,52 @@ class HuggingFaceCompletingModel(CompletingModel):
             yield CompletionChunk(finish_reason="stop")
 
 
-def _ingest_huggingface(
+def _import_huggingface(
     hf_id: str, family: str, suffix: str, token: str | None
 ) -> None:
-    """Download the HF weights and register them in the cortexgrid registry.
+    """Import the HF weights into the cortexgrid registry, or reuse the imported copy.
 
-    Submitted to the cluster via ``cortexgrid.remote`` (see `upload_huggingface`),
-    so the weights travel HuggingFace -> cluster node -> registry and never transit
-    the client. ``save_model`` scopes the version to the ambient Experiment, which
-    the remote job inherits from the submitter, so it lands under the same run the
-    deploy later reads."""
+    ``import_model`` downloads only when the weights still have to be uploaded. On
+    a model that is already ``ready`` it just re-bundles the serve code if it
+    changed, and either way tags the ambient Experiment's run with the model."""
     with tempfile.TemporaryDirectory() as d:
-        snapshot_download(repo_id=hf_id, local_dir=d, token=token)
-        remove_hf_download_metadata(d)
-        cortexgrid.save_model(
-            d, HuggingFaceCompletingDeployment, family=family, suffix=suffix
+        cortexgrid.import_model(
+            partial(download_hf_snapshot, hf_id, d, token),
+            HuggingFaceCompletingDeployment,
+            family=family,
+            suffix=suffix,
         )
 
 
 def upload_huggingface(model_id: str) -> str | None:
-    """Start ingesting *model_id*'s weights into the registry, on the cluster.
+    """Import *model_id*'s weights into the registry. Call it on every run.
 
-    Returns the id of the background ``cortexgrid.remote`` job, or None if the
-    model is already registered (phase `uploading`/`ready`) so there is nothing to
-    submit. Poll progress via ``deployment_status(model_id)``; deploy once `ready`."""
+    When the model is already ``ready``, imports it in-process, which uploads no
+    weights: it re-bundles changed serve code before the next deploy and tags this
+    run with the model, then returns None. When the model is absent or its upload
+    failed, submits the import as a ``cortexgrid.remote`` job, so the weights travel
+    HuggingFace -> cluster node -> registry and never transit the client, and
+    returns the job id. Returns None while another process is uploading it. Poll
+    progress via ``deployment_status(model_id)``; deploy once `ready`."""
     if not model_id.startswith("hf:"):
         return None
     hf_id = model_id[len("hf:") :]
     family, suffix = parse_hf_id(hf_id)
-    run_name = cortexgrid.Experiment.get_instance().run_name()
+    token = os.environ.get("HF_TOKEN")
 
-    status = cortexgrid.model_registry_status(family, suffix, run_name)
-    if status is not None and status.phase in ("uploading", "ready"):
+    status = cortexgrid.model_registry_status(family, suffix, cortexgrid.IMPORTED)
+    if status is not None and status.phase == "uploading":
+        return None
+    if status is not None and status.phase == "ready":
+        _import_huggingface(hf_id, family, suffix, token)
         return None
 
     return cortexgrid.remote(
-        _ingest_huggingface,
+        _import_huggingface,
         hf_id,
         family,
         suffix,
-        os.environ.get("HF_TOKEN"),
+        token,
         num_gpus=0,
         num_cpus=2,
     )
@@ -247,7 +252,7 @@ def deploy_huggingface(
         return None
     hf_id = model_id[len("hf:") :]
     family, suffix = parse_hf_id(hf_id)
-    run_name = cortexgrid.Experiment.get_instance().run_name()
+    run_name = cortexgrid.IMPORTED
 
     status = cortexgrid.model_registry_status(family, suffix, run_name)
     if status is None or status.phase != "ready":
@@ -270,7 +275,7 @@ def hf_deployment_status(model_id: str) -> Any:
     """Live phase of the deployment for *model_id*, delegated to cortexgrid.
 
     Read-only - safe to poll from a status endpoint while a deploy is in flight.
-    Resolves the same (family, suffix, run_name) identity `deploy` uses. Reports
+    Resolves the same (family, suffix, IMPORTED) identity `deploy` uses. Reports
     the serving lifecycle (`cortexgrid.model_serving_status`) once a Serve app
     exists; before that - while the weights are still uploading to the registry -
     it falls back to the registry lifecycle (`cortexgrid.model_registry_status`),
@@ -278,24 +283,23 @@ def hf_deployment_status(model_id: str) -> Any:
     if not model_id.startswith("hf:"):
         return None
     family, suffix = parse_hf_id(model_id[len("hf:") :])
-    run_name = cortexgrid.Experiment.get_instance().run_name()
-    serving = cortexgrid.model_serving_status(family, suffix, run_name)
+    serving = cortexgrid.model_serving_status(family, suffix, cortexgrid.IMPORTED)
     if serving.phase != "not_deployed":
         return serving
-    return cortexgrid.model_registry_status(family, suffix, run_name)
+    return cortexgrid.model_registry_status(family, suffix, cortexgrid.IMPORTED)
 
 
 def delete_huggingface(model_id: str) -> None:
     """Undeploy (if running) and delete this model's weights + serve bundle.
 
+    The imported model is shared by every run, so this removes it for all of them.
     Idempotent: safe whether or not the model is deployed or registered, so it is
     the inverse of `upload_huggingface` + `deploy_huggingface` for cleanup."""
     if not model_id.startswith("hf:"):
         return
     family, suffix = parse_hf_id(model_id[len("hf:") :])
-    run_name = cortexgrid.Experiment.get_instance().run_name()
-    cortexgrid.undeploy_model(family, suffix, run_name)
-    cortexgrid.delete_model(family, suffix, run_name)
+    cortexgrid.undeploy_model(family, suffix, cortexgrid.IMPORTED)
+    cortexgrid.delete_model(family, suffix, cortexgrid.IMPORTED)
 
 
 register_provider("hf:", deploy_huggingface)

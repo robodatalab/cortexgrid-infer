@@ -8,6 +8,8 @@ import os
 import shutil
 from typing import Any, Callable, Sequence, get_type_hints
 
+from huggingface_hub import snapshot_download
+
 from cortexgrid_infer.core import Tool, ToolSpec
 
 
@@ -119,7 +121,27 @@ def parse_hf_id(hf_id: str) -> tuple[str, str]:
 def remove_hf_download_metadata(local_dir: str) -> None:
     """Drop the `.cache/huggingface/` folder `snapshot_download(local_dir=...)`
     writes into `local_dir`: HuggingFace's own download bookkeeping (etags,
-    commit hashes), not part of the model. Left in place, `save_model` would
-    upload it to the registry along with the weights."""
+    commit hashes), not part of the model. Left in place, the registry upload
+    would store it along with the weights."""
     shutil.rmtree(os.path.join(local_dir, ".cache", "huggingface"), ignore_errors=True)
+
+
+def download_hf_snapshot(
+    hf_id: str,
+    local_dir: str,
+    token: str | None,
+    ignore_patterns: list[str] | None = None,
+) -> str:
+    """Download an HF repo's model files into `local_dir` and return it.
+
+    Shaped as `cortexgrid.import_model`'s source (bound with `partial`), so the
+    download runs only when the weights actually have to be uploaded."""
+    snapshot_download(
+        repo_id=hf_id,
+        local_dir=local_dir,
+        ignore_patterns=ignore_patterns,
+        token=token,
+    )
+    remove_hf_download_metadata(local_dir)
+    return local_dir
 

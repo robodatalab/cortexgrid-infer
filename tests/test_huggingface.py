@@ -4,37 +4,24 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import AsyncIterator
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+import cortexgrid
+
 from cortexgrid_infer.providers.huggingface_complete import (
     HuggingFaceCompletingModel,
-    _ingest_huggingface,
+    _import_huggingface,
     delete_huggingface,
     deploy_huggingface,
+    hf_deployment_status,
     upload_huggingface,
 )
 from cortexgrid_infer.providers.huggingface_complete_serve import (
     HuggingFaceCompletingDeployment,
 )
 from cortexgrid_infer.utils import parse_hf_id
-
-
-def _fake_snapshot_download(*, local_dir: str, **_kwargs: Any) -> None:
-    """Lay out what `snapshot_download(local_dir=...)` writes: the model files
-    plus HuggingFace's download bookkeeping under `.cache/huggingface/`."""
-    root = Path(local_dir)
-    (root / "config.json").write_text("{}")
-    metadata = root / ".cache" / "huggingface" / "download" / "config.json.metadata"
-    metadata.parent.mkdir(parents=True)
-    metadata.write_text("etag")
-
-
-def _files_under(local_dir: str) -> set[str]:
-    root = Path(local_dir)
-    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
 
 
 class TestParseHFId(unittest.TestCase):
@@ -172,62 +159,44 @@ class TestHuggingFaceCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
 
 # --- deploy_huggingface flow ---
 
-
-class _FakeExperiment:
-    def __init__(self, run_name: str) -> None:
-        self._run_name = run_name
-
-    def run_name(self) -> str:
-        return self._run_name
-
-
 class TestDeployHuggingFaceFlow(unittest.TestCase):
     def test_returns_none_for_non_hf_prefix(self):
         self.assertIsNone(deploy_huggingface("openai:gpt-4"))
         self.assertIsNone(deploy_huggingface("Qwen/Qwen2-2.5B-Instruct"))
 
     @mock.patch("cortexgrid_infer.providers.huggingface_complete.ensure_serving")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
-    def test_serves_registry_ready_model_within_timeout(
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
+    def test_serves_imported_model_within_timeout(
         self,
-        mock_experiment: mock.Mock,
         mock_registry: mock.Mock,
         mock_ensure_serving: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
         mock_registry.return_value = SimpleNamespace(phase="ready")
-        mock_ensure_serving.return_value = "http://h/r/Qwen2-2.5B/Instruct/run-1"
+        mock_ensure_serving.return_value = "http://h/r/Qwen2-2.5B/Instruct/imported"
 
         model = deploy_huggingface("hf:Qwen/Qwen2-2.5B-Instruct", timeout=120.0)
 
         assert model is not None
-        self.assertEqual(model.url, "http://h/r/Qwen2-2.5B/Instruct/run-1")
+        self.assertEqual(model.url, "http://h/r/Qwen2-2.5B/Instruct/imported")
         self.assertEqual(model.model_id, "hf:Qwen/Qwen2-2.5B-Instruct")
         self.assertEqual(
             (model.family, model.suffix, model.run_name),
-            ("Qwen2-2.5B", "Instruct", "run-1"),
+            ("Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED),
+        )
+        mock_registry.assert_called_once_with(
+            "Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED
         )
         mock_ensure_serving.assert_called_once_with(
-            "Qwen2-2.5B", "Instruct", "run-1", 120.0
+            "Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED, 120.0
         )
 
     @mock.patch("cortexgrid_infer.providers.huggingface_complete.ensure_serving")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
     def test_raises_when_not_registry_ready(
         self,
-        mock_experiment: mock.Mock,
         mock_registry: mock.Mock,
         mock_deploy: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
         for status in (None, SimpleNamespace(phase="uploading")):
             mock_registry.return_value = status
             with self.assertRaises(RuntimeError):
@@ -240,108 +209,108 @@ class TestUploadHuggingFace(unittest.TestCase):
         self.assertIsNone(upload_huggingface("openai:gpt-4"))
 
     @mock.patch.dict("os.environ", {"HF_TOKEN": "tok"})
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.remote", create=True
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
-    def test_submits_remote_ingest_when_absent(
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.remote")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
+    def test_submits_remote_import_when_absent_or_failed(
         self,
-        mock_experiment: mock.Mock,
         mock_registry: mock.Mock,
         mock_remote: mock.Mock,
+        mock_import: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        mock_registry.return_value = None
         mock_remote.return_value = "job-1"
+        for status in (
+            None,
+            SimpleNamespace(phase="upload_failed"),
+            SimpleNamespace(phase="broken"),
+        ):
+            mock_registry.return_value = status
+            mock_remote.reset_mock()
 
-        job = upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
+            job = upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
 
-        self.assertEqual(job, "job-1")
-        mock_remote.assert_called_once()
-        args = mock_remote.call_args.args
-        self.assertIs(args[0], _ingest_huggingface)
-        self.assertEqual(
-            args[1:], ("Qwen/Qwen2-2.5B-Instruct", "Qwen2-2.5B", "Instruct", "tok")
-        )
-        self.assertEqual(
-            mock_remote.call_args.kwargs, {"num_gpus": 0, "num_cpus": 2}
-        )
+            self.assertEqual(job, "job-1")
+            mock_remote.assert_called_once_with(
+                _import_huggingface,
+                "Qwen/Qwen2-2.5B-Instruct",
+                "Qwen2-2.5B",
+                "Instruct",
+                "tok",
+                num_gpus=0,
+                num_cpus=2,
+            )
+        mock_registry.assert_called_with("Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED)
+        mock_import.assert_not_called()
 
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.remote", create=True
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
-    def test_skips_when_already_registered(
+    @mock.patch("cortexgrid_infer.utils.snapshot_download")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.remote")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
+    def test_imports_in_process_when_ready(
         self,
-        mock_experiment: mock.Mock,
         mock_registry: mock.Mock,
         mock_remote: mock.Mock,
+        mock_import: mock.Mock,
+        mock_snapshot: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
-        for phase in ("uploading", "ready"):
-            mock_registry.return_value = SimpleNamespace(phase=phase)
-            self.assertIsNone(upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct"))
+        # Every run calls import_model, so it gets its tag and a re-bundle of
+        # changed serve code - without a cluster job or a download.
+        mock_registry.return_value = SimpleNamespace(phase="ready")
+
+        self.assertIsNone(upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct"))
+
         mock_remote.assert_not_called()
-
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.save_model")
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.snapshot_download",
-        side_effect=_fake_snapshot_download,
-    )
-    def test_ingest_does_not_save_hf_download_metadata(
-        self, _mock_snapshot: mock.Mock, mock_save: mock.Mock
-    ):
-        saved: list[set[str]] = []
-        mock_save.side_effect = lambda d, *_a, **_k: saved.append(_files_under(d))
-
-        _ingest_huggingface("Qwen/Qwen2-2.5B-Instruct", "Qwen2-2.5B", "Instruct", "tok")
-
-        self.assertEqual(saved, [{"config.json"}])
-
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.save_model")
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.snapshot_download")
-    def test_ingest_downloads_and_saves(
-        self, mock_snapshot: mock.Mock, mock_save: mock.Mock
-    ):
-        _ingest_huggingface(
-            "Qwen/Qwen2-2.5B-Instruct", "Qwen2-2.5B", "Instruct", "tok"
+        mock_import.assert_called_once()
+        self.assertIs(mock_import.call_args.args[1], HuggingFaceCompletingDeployment)
+        self.assertEqual(
+            mock_import.call_args.kwargs, {"family": "Qwen2-2.5B", "suffix": "Instruct"}
         )
+        mock_snapshot.assert_not_called()
+
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.remote")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
+    def test_skips_while_another_process_uploads(
+        self,
+        mock_registry: mock.Mock,
+        mock_remote: mock.Mock,
+        mock_import: mock.Mock,
+    ):
+        mock_registry.return_value = SimpleNamespace(phase="uploading")
+        self.assertIsNone(upload_huggingface("hf:Qwen/Qwen2-2.5B-Instruct"))
+        mock_remote.assert_not_called()
+        mock_import.assert_not_called()
+
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.import_model")
+    @mock.patch("cortexgrid_infer.utils.snapshot_download")
+    def test_import_downloads_only_when_source_is_called(
+        self, mock_snapshot: mock.Mock, mock_import: mock.Mock
+    ):
+        _import_huggingface("Qwen/Qwen2-2.5B-Instruct", "Qwen2-2.5B", "Instruct", "tok")
+
+        mock_snapshot.assert_not_called()
+        mock_import.assert_called_once()
+        self.assertIs(mock_import.call_args.args[1], HuggingFaceCompletingDeployment)
+        self.assertEqual(
+            mock_import.call_args.kwargs, {"family": "Qwen2-2.5B", "suffix": "Instruct"}
+        )
+
+        mock_import.call_args.args[0]()
         mock_snapshot.assert_called_once()
         self.assertEqual(
             mock_snapshot.call_args.kwargs["repo_id"], "Qwen/Qwen2-2.5B-Instruct"
         )
         self.assertEqual(mock_snapshot.call_args.kwargs["token"], "tok")
-        mock_save.assert_called_once()
-        self.assertIs(mock_save.call_args.args[1], HuggingFaceCompletingDeployment)
-        self.assertEqual(
-            mock_save.call_args.kwargs, {"family": "Qwen2-2.5B", "suffix": "Instruct"}
-        )
 
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.remote", create=True
-    )
-    @mock.patch(
-        "cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status",
-        create=True,
-    )
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.remote")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
     def test_core_dispatch_routes_hf(
         self,
-        mock_experiment: mock.Mock,
         mock_registry: mock.Mock,
         mock_remote: mock.Mock,
     ):
         import cortexgrid_infer
 
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
         mock_registry.return_value = None
         mock_remote.return_value = "job-9"
         self.assertEqual(
@@ -354,6 +323,34 @@ class TestUploadHuggingFace(unittest.TestCase):
         self.assertIsNone(cortexgrid_infer.upload_model("openai:gpt-4"))
 
 
+class TestHFDeploymentStatus(unittest.TestCase):
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_serving_status")
+    def test_reports_serving_status_once_deployed(
+        self, mock_serving: mock.Mock, mock_registry: mock.Mock
+    ):
+        mock_serving.return_value = SimpleNamespace(phase="running")
+        result = hf_deployment_status("hf:Qwen/Qwen2-2.5B-Instruct")
+        self.assertEqual(result.phase, "running")
+        mock_serving.assert_called_once_with(
+            "Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED
+        )
+        mock_registry.assert_not_called()
+
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_registry_status")
+    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.model_serving_status")
+    def test_falls_back_to_registry_status_before_deploy(
+        self, mock_serving: mock.Mock, mock_registry: mock.Mock
+    ):
+        mock_serving.return_value = SimpleNamespace(phase="not_deployed")
+        mock_registry.return_value = SimpleNamespace(phase="uploading")
+        result = hf_deployment_status("hf:Qwen/Qwen2-2.5B-Instruct")
+        self.assertEqual(result.phase, "uploading")
+        mock_registry.assert_called_once_with(
+            "Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED
+        )
+
+
 class TestDeleteHuggingFace(unittest.TestCase):
     def test_noop_for_non_hf_prefix(self):
         # No cortexgrid calls patched: a non-match must not touch the platform.
@@ -361,32 +358,32 @@ class TestDeleteHuggingFace(unittest.TestCase):
 
     @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.delete_model")
     @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.undeploy_model")
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
     def test_undeploys_then_deletes(
         self,
-        mock_experiment: mock.Mock,
         mock_undeploy: mock.Mock,
         mock_delete: mock.Mock,
     ):
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
         delete_huggingface("hf:Qwen/Qwen2-2.5B-Instruct")
-        mock_undeploy.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
-        mock_delete.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
+        mock_undeploy.assert_called_once_with(
+            "Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED
+        )
+        mock_delete.assert_called_once_with(
+            "Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED
+        )
 
     @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.delete_model")
     @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.undeploy_model")
-    @mock.patch("cortexgrid_infer.providers.huggingface_complete.cortexgrid.Experiment")
     def test_core_dispatch_routes_hf(
         self,
-        mock_experiment: mock.Mock,
         mock_undeploy: mock.Mock,
         mock_delete: mock.Mock,
     ):
         import cortexgrid_infer
 
-        mock_experiment.get_instance.return_value = _FakeExperiment("run-1")
         cortexgrid_infer.delete_model("hf:Qwen/Qwen2-2.5B-Instruct")
-        mock_delete.assert_called_once_with("Qwen2-2.5B", "Instruct", "run-1")
+        mock_delete.assert_called_once_with(
+            "Qwen2-2.5B", "Instruct", cortexgrid.IMPORTED
+        )
 
     def test_core_dispatch_noop_for_unhandled_prefix(self):
         import cortexgrid_infer

@@ -28,7 +28,10 @@ upload_model ──▶ [ registry: uploading ─▶ ready ] ──▶ deploy_mod
   as a `cortexgrid.remote` job), so large weights never round-trip through your
   machine. Only the model files are stored: HuggingFace's download bookkeeping
   (`.cache/huggingface/` inside the download folder) is dropped first. Returns a job
-  id; poll until the model is `ready`.
+  id; poll until the model is `ready`. The weights are imported once and shared by
+  every run (`cortexgrid.import_model`), so call `upload_model` on every run: once the
+  model is `ready` it uploads no weights, but re-bundles the serve code if it changed
+  and tags the run with the model it used, then returns `None`.
 - **Deploy** blocks until the model is ready to serve and returns a client. It
   requires the model to be registry-`ready` (raises otherwise), reuses a running
   Ray Serve app, waits on one still coming up, and replaces a failed one. See
@@ -41,8 +44,8 @@ upload_model ──▶ [ registry: uploading ─▶ ready ] ──▶ deploy_mod
 
 ## Quick start
 
-Every session starts a cortexgrid run; the model's registry/serving identity is
-scoped to it.
+Every session starts a cortexgrid run. The model itself is imported once and shared
+across runs; each run that uploads it is tagged with it.
 
 ```python
 import asyncio, time
@@ -53,7 +56,7 @@ cortexgrid.init(experiment="img-gen")   # one call per process; starts an MLflow
 mid = "hf-image:black-forest-labs/FLUX.2-klein-base-4B"
 
 # 1. Upload — ingest weights into the registry, on the cluster.
-mg.upload_model(mid)                     # returns a job id (None if already staged)
+mg.upload_model(mid)                     # job id, or None if already imported
 
 # 2. Query — wait until the weights are registered and deployable. status is None
 #    for a brief window after upload_model, before the ingest job registers the version.
@@ -143,7 +146,7 @@ prefix to the provider that registered for it.
 
 | Function | Purpose |
 |---|---|
-| `upload_model(id) -> str \| None` | Start ingesting the weights into the registry (a cluster job); returns its job id, or `None` if already staged or nothing to stage (hosted models). |
+| `upload_model(id) -> str \| None` | Import the weights into the registry; call it on every run. Returns the job id of the cluster import, or `None` if the model is already imported (its serve code is re-bundled if changed and the run is tagged), another process is importing it, or there is nothing to stage (hosted models). |
 | `deployment_status(id) -> status \| None` | Combined phase: the registry lifecycle (`uploading`/`ready`/`upload_failed`/`broken`) while staging, then the serving lifecycle (`deploying`/`running`/`failed`/…) once a Serve app exists. `None` for hosted models. |
 | `deploy_model(id, timeout=None) -> DeployedModel` | Return a client once the model is ready to serve (must be registry-`ready`). Blocks; see [Deploying](#deploying). Raises `ModelDeployFailed` when the deploy fails, `TimeoutError` past `timeout` seconds (`None` waits indefinitely). |
 | `complete(model, messages, tools=None, max_new_tokens=2048, temperature=0.7, **kw)` | Async stream of `CompletionChunk` for a `CompletingModel` (`hf:`, `Anthropic/`). |
@@ -178,7 +181,7 @@ for the full state machine and error table.
   repo's consolidated single-file checkpoint by default (only the component weights
   the pipeline loads are staged). Extend per-model with `HF_IMAGE_SNAPSHOT_IGNORE`
   (comma-separated globs).
-- **Run scoping.** A model's identity is `(family, suffix, run_name)`, derived from
-  the model id and the active cortexgrid run. Upload, deploy, status, and delete all
-  resolve the same identity, so they must run against the same `cortexgrid.init`
-  experiment/run.
+- **Shared across runs.** A model's identity is `(family, suffix, cortexgrid.IMPORTED)`,
+  derived from the model id alone, so every run uploads, deploys, and deletes the same
+  copy. `delete_model` therefore removes it for all runs. Upload still needs an active
+  cortexgrid run, which it tags with the model.
