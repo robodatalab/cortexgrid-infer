@@ -65,9 +65,9 @@ class ModelImport(abc.ABC):
     """What `cortexgrid.import_model` needs to take one model into the registry.
 
     Not every model has weights. One that does supplies them through
-    `HuggingFaceImport.source`; one that does not - a serve app that forwards to
-    a hosted API - is registered with no source at all, and carries what it needs
-    to reach that API in its requirements' `params`."""
+    `HuggingFaceImport.source` and is taken by `import_model`; one that does not
+    - a serve app that forwards to a hosted API - carries what it needs to reach
+    that API in `config` and is taken by `register_model`."""
 
     # The class cortexgrid bundles and instantiates on the cluster. Set by each
     # concrete importer.
@@ -80,6 +80,14 @@ class ModelImport(abc.ABC):
     @abc.abstractmethod
     def requirements(self) -> cortexgrid.ModelRequirements:
         """What one replica of this model needs to be placed and to run."""
+
+    def config(self) -> dict[str, str]:
+        """Settings the serve app reads with `cortexgrid.model_config`.
+
+        For what is neither weights nor hardware - which model a provider should
+        be asked for, the name of a secret to read. Empty for a model whose
+        bundled code already knows everything it needs."""
+        return {}
 
     @abc.abstractmethod
     def client(self, url: str) -> DeployedModel:

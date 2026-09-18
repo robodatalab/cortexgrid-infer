@@ -12,7 +12,10 @@ dependencies = [
     # 0.2.96: import_model, which re-bundles changed serve-app code (#440).
     # 0.2.97: ModelRequirements on import_model - the serve app's num_gpus /
     # num_replicas class attributes are no longer read (#446).
-    "cortexgrid>=0.2.97",
+    # 0.3.4: jobs return results (remote -> JobFuture), register_model for a
+    # model that stages no weights, model_config, and deploy_model skipping a
+    # redundant PUT - which is why this library has no reuse guard of its own.
+    "cortexgrid>=0.3.4",
     "torch>=2.0.0",
     "transformers>=4.40.0",
     "huggingface_hub>=0.20.0",

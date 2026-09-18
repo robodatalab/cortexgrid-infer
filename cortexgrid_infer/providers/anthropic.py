@@ -27,13 +27,13 @@ DEFAULT_API_KEY_SECRET = "ANTHROPIC_API_KEY"
 class AnthropicImport(ModelImport):
     """What `cortexgrid.import_model` needs to register an Anthropic model.
 
-    There are no weights, so it is imported with no source:
+    There are no weights, so it is registered rather than imported:
 
         imp = AnthropicImport("claude-sonnet-5")
-        cortexgrid.import_model(
-            None, imp.serve_app,
+        cortexgrid.register_model(
+            imp.serve_app,
             family=imp.family, suffix=imp.suffix,
-            requirements=imp.requirements(),
+            requirements=imp.requirements(), config=imp.config(),
         )
 
     `model_id` is the name Anthropic knows the model by, and is what the
@@ -50,19 +50,16 @@ class AnthropicImport(ModelImport):
         self.family, self.suffix = split_model_id(model_id)
 
     def requirements(self) -> cortexgrid.ModelRequirements:
-        """No hardware, and the two parameters the deployment needs to call out.
+        """None: a replica holds no weights and does no compute of its own, so
+        it is placed on any node, CPU-only included."""
+        return cortexgrid.ModelRequirements()
 
-        A replica holds no weights and does no compute of its own, so it asks
-        for nothing and is placed on any node, CPU-only included."""
-        # `params` awaits the cortexgrid change that lets a registry entry carry
-        # arbitrary values; until it lands this is the one thing here that does
-        # not typecheck.
-        return cortexgrid.ModelRequirements(  # type: ignore[call-arg]
-            params={
-                MODEL_PARAM: self.model_id,
-                API_KEY_SECRET_PARAM: self.api_key_secret,
-            }
-        )
+    def config(self) -> dict[str, str]:
+        """Which model the deployment asks for, and the secret to ask with."""
+        return {
+            MODEL_PARAM: self.model_id,
+            API_KEY_SECRET_PARAM: self.api_key_secret,
+        }
 
     def client(self, url: str) -> ServedCompletingModel:
         return ServedCompletingModel(url=url, model_id=self.model_id)

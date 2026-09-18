@@ -2,8 +2,8 @@
 
 The odd one out among serve apps: it loads no weights and needs no GPU. What it
 needs instead is which Anthropic model to call and a key to call it with, and
-those come from the registry entry - `params` on the model's requirements, set
-when the model was imported and editable on its model card afterwards.
+those come from the registry entry's `config`, set when the model was registered
+and editable on its model card afterwards.
 
 It speaks the same `/complete` protocol as every other completion app, so the
 same client talks to it. Anthropic reports tool calls as structured blocks
@@ -112,19 +112,16 @@ def to_anthropic_tools(
 @serve.ingress(_app)
 class AnthropicDeployment:
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        saved = cortexgrid.model_registry_status(family, suffix, run_name)
-        if saved is None:
-            raise RuntimeError(f"No registry entry for {family}/{suffix}/{run_name}")
-        params = saved.requirements.params  # type: ignore[attr-defined]
-        missing = {MODEL_PARAM, API_KEY_SECRET_PARAM} - params.keys()
+        config = cortexgrid.model_config(family, suffix, run_name)
+        missing = {MODEL_PARAM, API_KEY_SECRET_PARAM} - config.keys()
         if missing:
             raise RuntimeError(
-                f"{family}/{suffix}/{run_name} is missing {sorted(missing)} in its "
-                "requirements' params; set them on the model card"
+                f"{family}/{suffix}/{run_name} is missing {sorted(missing)} from "
+                "its config; set them on the model card"
             )
-        self._model = params[MODEL_PARAM]
+        self._model = config[MODEL_PARAM]
         self._client = AsyncAnthropic(
-            api_key=cortexgrid.get_secret(params[API_KEY_SECRET_PARAM])
+            api_key=cortexgrid.get_secret(config[API_KEY_SECRET_PARAM])
         )
 
     @_app.post("/complete")

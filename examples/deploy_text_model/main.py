@@ -27,7 +27,7 @@ HF_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 
 def import_weights(
     importer: mg.HuggingFaceCompletingImport, requirements: cortexgrid.ModelRequirements
-) -> bool:
+) -> None:
     """Import the model into the registry under the hardware it needs to be served.
 
     Runs on a cluster node, not the caller's machine, so the weights travel
@@ -37,21 +37,16 @@ def import_weights(
     to be uploaded, so a model that is already `ready` downloads nothing and
     just re-bundles changed serve code.
 
-    Returns whether the import worked, which the caller reads as this job's
-    result."""
-    try:
-        with importer:
-            cortexgrid.import_model(
-                importer.source,
-                importer.serve_app,
-                family=importer.family,
-                suffix=importer.suffix,
-                requirements=requirements,
-            )
-    except Exception:
-        return False
-
-    return True
+    Nothing is caught here: `JobFuture.result()` re-raises whatever this raises,
+    so a failed import reaches the caller with its own traceback intact."""
+    with importer:
+        cortexgrid.import_model(
+            importer.source,
+            importer.serve_app,
+            family=importer.family,
+            suffix=importer.suffix,
+            requirements=requirements,
+        )
 
 
 async def stream_reply(model: mg.CompletingModel, messages: list[mg.Message]) -> str:
@@ -98,16 +93,18 @@ def main() -> None:
 
     try:
         print(f"importing {HF_ID} as {imp.family}/{imp.suffix}")
-        result = cortexgrid.remote(
+        job = cortexgrid.remote(
             import_weights,
             imp,
             requirements,
             num_gpus=0,
             num_cpus=2,
         )
-
-        if result == False:
-            raise RuntimeError("something broke")
+        print(f"  import job: {job.job_id}")
+        # Blocks until the job finishes, and re-raises whatever it raised. The
+        # job's exit is the whole answer - a returned call means the weights are
+        # in the registry, so there is no second lifecycle to poll.
+        job.result()
 
         print("deploying")
         deployment = cortexgrid.deploy_model(

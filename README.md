@@ -25,6 +25,7 @@ An **importer** is the whole of this library's cluster-side surface. It gives yo
 | `.family` / `.suffix` | how this model id names itself in the registry |
 | `.serve_app` | the class cortexgrid bundles and runs on the cluster |
 | `.requirements()` | what one replica needs to be placed and to run |
+| `.config()` | settings the serve app reads at construction, if it needs any |
 | `.client(url)` | a client that speaks the deployed app's routes |
 | `.source` | *(models with weights)* a callable that downloads them and returns the directory |
 
@@ -35,8 +36,9 @@ An **importer** is the whole of this library's cluster-side surface. It gives yo
 | `AnthropicImport(model_id, api_key_secret=...)` | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
 
 Not every model has weights, so `.source` belongs to the HuggingFace importers
-rather than to all of them; an `AnthropicImport` is registered with no source at
-all. Everything else is common, which is why one client serves all three: every
+rather than to all of them: one that has weights goes through
+`cortexgrid.import_model`, one that has none through `cortexgrid.register_model`.
+Everything else is common, which is why one client serves all three — every
 completion app speaks the same `/complete` protocol.
 
 ## Quick start
@@ -59,7 +61,11 @@ def import_weights(importer, requirements):
             requirements=requirements,
         )
 
-cortexgrid.remote(import_weights, imp, imp.requirements(), num_gpus=0, num_cpus=2)
+# remote() hands back a JobFuture; result() blocks and re-raises whatever the
+# job raised, so a failed import surfaces here with its own traceback.
+cortexgrid.remote(
+    import_weights, imp, imp.requirements(), num_gpus=0, num_cpus=2
+).result()
 
 # 2. Deploy — blocks until the Ray Serve app is running.
 deployment = cortexgrid.deploy_model(
@@ -144,17 +150,23 @@ app forwards to the API instead of loading anything:
 cortexgrid.set_secret("ANTHROPIC_API_KEY", "sk-ant-...")   # once
 
 imp = mg.AnthropicImport("claude-sonnet-5")
-cortexgrid.import_model(
-    None, imp.serve_app,
+cortexgrid.register_model(
+    imp.serve_app,
     family=imp.family, suffix=imp.suffix,
-    requirements=imp.requirements(),
+    requirements=imp.requirements(), config=imp.config(),
 )
 ```
 
-The entry carries the Anthropic model name and the **name of** the cortexgrid
+`register_model` is `import_model` for a model that stages nothing: only the
+serve bundle is stored, and the entry is indistinguishable from an imported one
+to `deploy_model`, `list_models` and the dashboard.
+
+`config` carries the Anthropic model name and the **name of** the cortexgrid
 secret holding the key — never the key itself, since a registry entry is readable
-by anyone who can see the model. Both are editable on the model card afterwards,
-so pointing a deployment at a different model or key needs no re-import.
+by anyone who can see the model. The serve app reads it with
+`cortexgrid.model_config` at construction, and both values are editable on the
+model card, so pointing a deployment at a different model or key is an edit plus
+a re-deploy rather than a re-registration.
 
 A replica asks for no hardware at all, so it is placed on any node, CPU-only
 included. From there it deploys and streams exactly like a cluster-served model:
@@ -169,7 +181,7 @@ serve app re-encodes them into the text form the client parses.
 | `HuggingFaceCompletingImport(hf_id, token=None)` | Importer for a causal LM. |
 | `HuggingFaceImageImport(hf_id, token=None, ignore_patterns=None)` | Importer for a diffusers pipeline. |
 | `AnthropicImport(model_id, api_key_secret="ANTHROPIC_API_KEY")` | Importer for an Anthropic model; no weights. |
-| `ModelImport` | Base of all three: `family`, `suffix`, `serve_app`, `requirements()`, `client(url)`. |
+| `ModelImport` | Base of all three: `family`, `suffix`, `serve_app`, `requirements()`, `config()`, `client(url)`. |
 | `HuggingFaceImport` | Adds the download half — `source` and the scratch directory. Subclass it for another HuggingFace family. |
 | `complete(model, messages, tools=None, max_new_tokens=2048, temperature=0.7, **kw)` | Async stream of `CompletionChunk` for a `CompletingModel`. |
 | `generate(model, prompt, *, image=None, **kw) -> GeneratedImage` | One image from a `GeneratingModel`. |
@@ -193,13 +205,20 @@ to stream text from `POST /complete`, inlining tool calls as
 - **HuggingFace auth.** For gated/private repos, pass `token=` to the importer (or
   read `HF_TOKEN` yourself and pass it); it travels with the importer to the node
   that downloads.
-- **Image weight pruning.** `HuggingFaceImageImport` defaults to skipping example
-  images, docs, and a repo's consolidated single-file checkpoint, so only the
-  component weights the pipeline loads are staged. Extend per-model with
-  `HF_IMAGE_SNAPSHOT_IGNORE` (comma-separated globs), or pass `ignore_patterns=`
-  to replace the defaults outright. The same globs bound the hardware estimate: a
-  pipeline repo ships several dtype variants of the same component, and counting
-  the ones the download skips would overestimate by multiples.
+- **Image weight pruning.** `HuggingFaceImageImport` skips example images, docs and
+  `.gitattributes` by default — nothing `from_pretrained` reads. It does **not**
+  skip a repo's consolidated single-file checkpoint, which is weights it cannot
+  tell apart from the component ones: name it per-model in
+  `HF_IMAGE_SNAPSHOT_IGNORE` (comma-separated globs, e.g.
+  `flux-2-klein-base-4b.safetensors`) to save staging it, or pass
+  `ignore_patterns=` to replace the defaults outright. Whatever the globs, the
+  download and the hardware estimate use the same list, so the figures always
+  describe what actually gets staged:
+
+  ```python
+  >>> mg.HuggingFaceImageImport("black-forest-labs/FLUX.2-klein-base-4B").requirements()
+  ModelRequirements(num_gpus=1, ram_gb=26.3, vram_gb=29.6)   # single-file checkpoint included
+  ```
 - **Only model files are stored.** HuggingFace's download bookkeeping
   (`.cache/huggingface/` inside the download folder) is dropped before the upload.
 - **Shared across runs.** A model's identity is `(family, suffix, cortexgrid.IMPORTED)`,
