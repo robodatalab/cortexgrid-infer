@@ -1,3 +1,24 @@
+"""Run inference on models the cortexgrid cluster serves.
+
+cortexgrid owns a model's life - registry identity, weights, serve bundle,
+hardware placement, deployment, jobs - and knows nothing about what kind of
+model it holds. This library supplies the per-family knowledge those calls need
+and nothing else: an importer that names, fetches, sizes and serves one family
+of models, and a client that speaks the deployed app's routes.
+
+    imp = cortexgrid_infer.HuggingFaceCompletingImport("Qwen/Qwen2.5-0.5B-Instruct")
+    with imp:
+        cortexgrid.import_model(
+            imp.source, imp.serve_app,
+            family=imp.family, suffix=imp.suffix,
+            requirements=imp.requirements(),
+        )
+    deployment = cortexgrid.deploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED, wait=True)
+    model = imp.client(deployment.url)
+
+See `examples/deploy_text_model` for the whole lifecycle, import job included.
+"""
+
 from cortexgrid import ModelDeployFailed
 
 from cortexgrid_infer.core import (
@@ -11,28 +32,15 @@ from cortexgrid_infer.core import (
     ToolCall,
     ToolSpec,
     complete,
-    delete_model,
-    deploy_model,
-    deployment_status,
     generate,
-    register_deleter,
-    register_provider,
-    register_status_provider,
-    register_uploader,
-    upload_model,
 )
+from cortexgrid_infer.completion import ServedCompletingModel
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.providers.anthropic import deploy_anthropic, AnthropicModel
-from cortexgrid_infer.providers.huggingface_complete import (
-    delete_huggingface,
-    deploy_huggingface,
-    upload_huggingface,
-    HuggingFaceCompletingModel,
-)
+from cortexgrid_infer.importing import HuggingFaceImport, ModelImport, split_model_id
+from cortexgrid_infer.providers.anthropic import AnthropicImport
+from cortexgrid_infer.providers.huggingface_complete import HuggingFaceCompletingImport
 from cortexgrid_infer.providers.huggingface_image import (
-    delete_huggingface_image,
-    deploy_huggingface_image,
-    upload_huggingface_image,
+    HuggingFaceImageImport,
     HuggingFaceImageModel,
 )
 
@@ -47,25 +55,15 @@ __all__ = [
     "ToolCall",
     "ToolSpec",
     "complete",
-    "deploy_model",
-    "ModelDeployFailed",
-    "deployment_status",
-    "upload_model",
-    "delete_model",
     "generate",
+    "ModelDeployFailed",
     "detect_device",
-    "register_provider",
-    "register_status_provider",
-    "register_uploader",
-    "register_deleter",
-    "deploy_anthropic",
-    "AnthropicModel",
-    "deploy_huggingface",
-    "upload_huggingface",
-    "delete_huggingface",
-    "HuggingFaceCompletingModel",
-    "deploy_huggingface_image",
-    "upload_huggingface_image",
-    "delete_huggingface_image",
+    "split_model_id",
+    "ModelImport",
+    "HuggingFaceImport",
+    "HuggingFaceCompletingImport",
+    "HuggingFaceImageImport",
+    "AnthropicImport",
+    "ServedCompletingModel",
     "HuggingFaceImageModel",
 ]

@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import tempfile
 import unittest
 from functools import partial
-from pathlib import Path
-from typing import Any
-from unittest import mock
 
 from cortexgrid_infer.utils import (
     build_tool_map,
-    download_hf_snapshot,
     function_to_tool_spec,
     normalize_tools,
     tool_name,
@@ -108,33 +103,3 @@ class TestBuildToolMap(unittest.TestCase):
         spec = {"function": {"name": "x"}}
         m = build_tool_map([spec])
         self.assertEqual(m, {})
-
-
-def _fake_snapshot_download(*, local_dir: str, **_kwargs: Any) -> None:
-    """Lay out what `snapshot_download(local_dir=...)` writes: the model files
-    plus HuggingFace's download bookkeeping under `.cache/huggingface/`."""
-    root = Path(local_dir)
-    (root / "config.json").write_text("{}")
-    metadata = root / ".cache" / "huggingface" / "download" / "config.json.metadata"
-    metadata.parent.mkdir(parents=True)
-    metadata.write_text("etag")
-
-
-def _files_under(local_dir: str) -> set[str]:
-    root = Path(local_dir)
-    return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
-
-
-class TestDownloadHFSnapshot(unittest.TestCase):
-    @mock.patch(
-        "cortexgrid_infer.utils.snapshot_download", side_effect=_fake_snapshot_download
-    )
-    def test_downloads_model_files_without_hf_metadata(self, mock_snapshot: mock.Mock):
-        with tempfile.TemporaryDirectory() as d:
-            result = download_hf_snapshot("org/Model-4B", d, "tok", ["*.md"])
-
-            self.assertEqual(result, d)
-            self.assertEqual(_files_under(d), {"config.json"})
-        mock_snapshot.assert_called_once_with(
-            repo_id="org/Model-4B", local_dir=d, ignore_patterns=["*.md"], token="tok"
-        )

@@ -33,9 +33,6 @@ _RESERVED_BODY_KEYS = {
 
 @serve.ingress(_app)
 class HuggingFaceCompletingDeployment:
-    num_gpus = 1
-    num_replicas = 1
-
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         path = cortexgrid.load_model(family, suffix, run_name)
         self._device = detect_device()

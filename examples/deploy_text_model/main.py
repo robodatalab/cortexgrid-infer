@@ -1,35 +1,52 @@
 """Deploy a HuggingFace text model on the cortexgrid cluster and chat with it.
 
-Runs the whole lifecycle in one go: upload the weights to the registry, deploy the
-Ray Serve app, chat in the terminal, then delete the model from the cluster.
+Runs the whole lifecycle in one go: import the weights into the registry, deploy
+the Ray Serve app, chat in the terminal, then delete the model from the cluster.
+
+The lifecycle is driven with the cortexgrid SDK directly - `remote`,
+`import_model`, `deploy_model`, `delete_model`. cortexgrid-infer only supplies
+the HuggingFace-shaped pieces those calls need: the serve app that will run the
+weights, the download that fetches them, the registry identity to file them
+under, an estimate of the hardware one replica needs, and the HTTP client for
+the deployed app.
 
 Requires CORTEXGRID_HEAD_URL (e.g. in the repo-root .env), and HF_TOKEN for gated
 models.
 """
 
 import asyncio
-import time
+import os
 
 import cortexgrid
 from dotenv import load_dotenv
 
 import cortexgrid_infer as mg
 
-MODEL_ID = "hf:Qwen/Qwen2.5-0.5B-Instruct"
-POLL_INTERVAL_S = 10
+HF_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 
 
-def wait_until_uploaded(model_id: str) -> None:
-    while True:
-        # None for a brief window before the ingest job registers the version.
-        status = mg.deployment_status(model_id)
-        phase = None if status is None else status.phase
-        print(f"  phase: {phase}")
-        if phase == "ready":
-            return
-        if phase in ("upload_failed", "broken"):
-            raise RuntimeError(f"upload of {model_id} ended in phase '{phase}'")
-        time.sleep(POLL_INTERVAL_S)
+def import_weights(
+    importer: mg.HuggingFaceCompletingImport, requirements: cortexgrid.ModelRequirements
+) -> None:
+    """Import the model into the registry under the hardware it needs to be served.
+
+    Runs on a cluster node, not the caller's machine, so the weights travel
+    HuggingFace -> node -> registry and never transit the client. The importer
+    owns the scratch directory the download lands in, and hands `import_model` a
+    source callable that fills it - called only when the weights actually have
+    to be uploaded, so a model that is already `ready` downloads nothing and
+    just re-bundles changed serve code.
+
+    Nothing is caught here: `JobFuture.result()` re-raises whatever this raises,
+    so a failed import reaches the caller with its own traceback intact."""
+    with importer:
+        cortexgrid.import_model(
+            importer.source,
+            importer.serve_app,
+            family=importer.family,
+            suffix=importer.suffix,
+            requirements=requirements,
+        )
 
 
 async def stream_reply(model: mg.CompletingModel, messages: list[mg.Message]) -> str:
@@ -63,19 +80,45 @@ def main() -> None:
     exp = cortexgrid.Experiment.init("cortexgrid-infer-examples")
     print(f"run: {exp.run_name()}")
 
+    token = os.environ.get("HF_TOKEN")
+    imp = mg.HuggingFaceCompletingImport(HF_ID, token=token)
+
+    # Reads the repo's safetensors headers over HTTP - no weights downloaded - so
+    # the registry entry carries the hardware a replica needs and Ray places it
+    # on a node that has it. An estimate: override it with a
+    # `cortexgrid.ModelRequirements(...)` of your own where you know better, or
+    # edit the figures on the model card in the dashboard afterwards.
+    requirements = imp.requirements()
+    print(f"requirements: {requirements}")
+
     try:
-        print(f"uploading {MODEL_ID}")
-        mg.upload_model(MODEL_ID)
-        wait_until_uploaded(MODEL_ID)
+        print(f"importing {HF_ID} as {imp.family}/{imp.suffix}")
+        job = cortexgrid.remote(
+            import_weights,
+            imp,
+            requirements,
+            num_gpus=0,
+            num_cpus=2,
+        )
+        print(f"  import job: {job.job_id}")
+        # Blocks until the job finishes, and re-raises whatever it raised. The
+        # job's exit is the whole answer - a returned call means the weights are
+        # in the registry, so there is no second lifecycle to poll.
+        job.result()
 
         print("deploying")
-        model = mg.deploy_model(MODEL_ID)
-        assert isinstance(model, mg.CompletingModel)
+        deployment = cortexgrid.deploy_model(
+            family=imp.family,
+            suffix=imp.suffix,
+            run_name=cortexgrid.IMPORTED,
+            wait=True,
+        )
 
-        chat(model)
+        chat(imp.client(deployment.url))
     finally:
         print("deleting")
-        mg.delete_model(MODEL_ID)
+        cortexgrid.undeploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED)
+        cortexgrid.delete_model(imp.family, imp.suffix, cortexgrid.IMPORTED)
 
 
 if __name__ == "__main__":

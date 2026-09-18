@@ -397,7 +397,7 @@ wheels = [
 
 [[package]]
 name = "cortexgrid"
-version = "0.2.96"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -417,14 +417,14 @@ dependencies = [
     { name = "setuptools" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bc/77/70f813ba30b1359eed194e65f7c97d58608866850ae631bb3736c355bf8f/cortexgrid-0.2.96.tar.gz", hash = "sha256:947f08876f608d572edced0974f4cf8b451d81e06589d4f10911c9d47805eea5", size = 39918, upload-time = "2026-09-17T10:18:31.917Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/c0/03ff1a113114c30c3be8d01a23c7b3127c8f821c1a48bb64e8d15e12b6fc/cortexgrid-0.3.4.tar.gz", hash = "sha256:095a5a643d13870ad4100683e8a2bce4f2af55c835b317371965ffadf28a5a44", size = 48809, upload-time = "2026-09-18T11:08:32.804Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/05/b1/6316c59af192509ea0a080abcdd41e32da56abd528704e051223550b0960/cortexgrid-0.2.96-py3-none-any.whl", hash = "sha256:73dcc60d4de922a427f180aa0e193bbf6544302bac30953f7513b79e2082a033", size = 47940, upload-time = "2026-09-17T10:18:30.516Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/49/207b4872593cf40adc3b3615e1ac4db6d1244f469bdcef6100347c853e81/cortexgrid-0.3.4-py3-none-any.whl", hash = "sha256:1987a126db45124d7e2f43761955a660ebc6d9cbd99795e65172adf4c6d00181", size = 57264, upload-time = "2026-09-18T11:08:31.46Z" },
 ]
 
 [[package]]
 name = "cortexgrid-infer"
-version = "0.1.13"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
@@ -451,7 +451,7 @@ dev = [
 requires-dist = [
     { name = "accelerate", specifier = ">=0.33" },
     { name = "anthropic", specifier = ">=0.40.0" },
-    { name = "cortexgrid", specifier = ">=0.2.96" },
+    { name = "cortexgrid", specifier = ">=0.3.4" },
     { name = "diffusers", specifier = ">=0.38" },
     { name = "fastapi", specifier = ">=0.133" },
     { name = "httpx", specifier = ">=0.27.0" },
