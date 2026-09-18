@@ -1,4 +1,4 @@
-"""DeployedModel ABC, provider registry, and completion API."""
+"""Provider-agnostic model vocabulary: the types a caller programs against."""
 
 from __future__ import annotations
 
@@ -6,12 +6,7 @@ import abc
 from dataclasses import dataclass, field
 from functools import partial
 from collections.abc import AsyncIterator
-from typing import (
-    Any,
-    Callable,
-    Sequence,
-    TypeVar,
-)
+from typing import Any, Callable, Sequence
 
 
 @dataclass
@@ -49,14 +44,6 @@ class DeployedModel(abc.ABC):
     @property
     @abc.abstractmethod
     def name(self) -> str: ...
-
-    def undeploy(self) -> None:
-        """Release the underlying deployment, if this provider manages one.
-
-        The caller owns the model's lifecycle and calls this to tear it down
-        (e.g. on server shutdown). Hosted-API providers (e.g. Anthropic) have
-        nothing to release, so the default is a no-op; cluster-backed providers
-        override it to free their compute."""
 
 
 class CompletingModel(DeployedModel):
@@ -98,126 +85,6 @@ class GeneratingModel(DeployedModel):
         seed: int | None = None,
         **kwargs: Any,
     ) -> GeneratedImage: ...
-
-
-_providers: list[tuple[str, Callable[[str, float | None], DeployedModel | None]]] = []
-
-T = TypeVar("T", bound=DeployedModel)
-
-
-def register_provider(
-    prefix: str, factory: Callable[[str, float | None], DeployedModel | None]
-) -> None:
-    """Register a model provider that handles model IDs starting with *prefix*.
-
-    The factory is called with the model id and `deploy_model`'s timeout, and
-    returns a model ready to serve, or None to pass the id to the next provider."""
-    _providers.append((prefix, factory))
-
-
-def deploy_model(model_id: str, timeout: float | None = None) -> DeployedModel:
-    """Return a client for *model_id* once the model is ready to serve.
-
-    Blocks until then. A cluster-backed model reuses its Serve app when it is
-    running, waits on one still coming up, and otherwise deploys afresh - a
-    failed app is torn down first. Raises ``ModelDeployFailed`` when the deploy
-    fails, and TimeoutError when the model is not serving within *timeout*
-    seconds (None waits indefinitely). Hosted-API models return immediately."""
-    for prefix, factory in _providers:
-        if not model_id.startswith(prefix):
-            continue
-        model = factory(model_id, timeout)
-        if model is None:
-            continue
-        return model
-    raise ValueError(
-        f"No provider registered for model '{model_id}'. "
-        f"Known prefixes: {[p for p, _ in _providers]}"
-    )
-
-
-# Status providers mirror deploy providers: a prefix -> a function that reports the
-# live deployment status for that model id (delegating to the platform, e.g.
-# cortexgrid.model_serving_status). Kept separate from _providers because a status
-# query must NOT construct/deploy anything - it just reads current state.
-_status_providers: list[tuple[str, Callable[[str], Any]]] = []
-
-
-def register_status_provider(prefix: str, fn: Callable[[str], Any]) -> None:
-    """Register a deployment-status reporter for model IDs starting with *prefix*."""
-    _status_providers.append((prefix, fn))
-
-
-def deployment_status(model_id: str) -> Any:
-    """Report the current deployment status/phase for *model_id*, or None if no
-    status provider handles it (e.g. hosted-API models with nothing to schedule).
-    The returned object is whatever the platform reports - for cluster-backed
-    providers, a ``cortexgrid.ServingStatus`` (``phase`` + ``message``) once a
-    Serve app exists, or a ``cortexgrid.SavedModel`` while the weights are still
-    uploading to the registry."""
-    for prefix, fn in _status_providers:
-        if not model_id.startswith(prefix):
-            continue
-        result = fn(model_id)
-        if result is not None:
-            return result
-    return None
-
-
-# Uploaders mirror deploy/status providers: a prefix -> a function that STARTS an
-# ingest of the model's weights into the cortexgrid registry and returns the id of
-# the background job doing it, or None when there is nothing to upload (already
-# imported, or a hosted-API model with no weights). This is deliberately split
-# from deploy: a model must be uploaded (registry phase `ready`) before
-# `deploy_model` can schedule it, and the upload runs on the cluster - not the
-# caller's machine - so large weights never round-trip through the client.
-_uploaders: list[tuple[str, Callable[[str], str | None]]] = []
-
-
-def register_uploader(prefix: str, fn: Callable[[str], str | None]) -> None:
-    """Register a registry-upload starter for model IDs starting with *prefix*."""
-    _uploaders.append((prefix, fn))
-
-
-def upload_model(model_id: str) -> str | None:
-    """Start uploading *model_id*'s weights into the cortexgrid registry, returning
-    the id of the background job doing it, or None if nothing needs uploading
-    (already imported, or a hosted-API model with no weights to stage).
-
-    Call it on every run: an already-imported model uploads no weights, but has its
-    serve code re-bundled if it changed and tags the run with the model. The upload
-    runs on the cluster, not the caller's machine. Poll its progress
-    with ``deployment_status(model_id)`` (registry phase `uploading -> ready`);
-    once `ready`, call ``deploy_model(model_id)``."""
-    for prefix, fn in _uploaders:
-        if model_id.startswith(prefix):
-            return fn(model_id)
-    return None
-
-
-# Deleters mirror the other registries: a prefix -> a function that removes a model
-# from the platform (undeploy its Serve app if running, then delete its weights +
-# serve bundle from the registry). The inverse of upload+deploy; kept separate so a
-# caller can tear a model down by id without holding a deployed-model handle.
-_deleters: list[tuple[str, Callable[[str], None]]] = []
-
-
-def register_deleter(prefix: str, fn: Callable[[str], None]) -> None:
-    """Register a registry-cleanup handler for model IDs starting with *prefix*."""
-    _deleters.append((prefix, fn))
-
-
-def delete_model(model_id: str) -> None:
-    """Remove *model_id* from the platform: undeploy its Serve app if running, then
-    delete its weights and serve bundle from the registry.
-
-    Idempotent - safe whether or not the model is currently deployed or registered -
-    and a no-op for model ids no deleter handles (e.g. hosted-API models, which have
-    nothing on the cluster to clean up)."""
-    for prefix, fn in _deleters:
-        if model_id.startswith(prefix):
-            fn(model_id)
-            return
 
 
 async def complete(

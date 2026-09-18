@@ -1,6 +1,6 @@
 [project]
 name = "cortexgrid-infer"
-version = "0.1.14"
+version = "0.2.0"
 description = "Deploy and interact with models across providers (Anthropic, HuggingFace LLM + diffusion)"
 readme = "README.md"
 license = "Apache-2.0"
@@ -10,7 +10,9 @@ dependencies = [
     # wait_for_model_serving / ModelDeployFailed, and deploy_model clearing a
     # failed Serve app. 0.2.93: serve-app routes work on the Ray 2.58 cluster.
     # 0.2.96: import_model, which re-bundles changed serve-app code (#440).
-    "cortexgrid>=0.2.96",
+    # 0.2.97: ModelRequirements on import_model - the serve app's num_gpus /
+    # num_replicas class attributes are no longer read (#446).
+    "cortexgrid>=0.2.97",
     "torch>=2.0.0",
     "transformers>=4.40.0",
     "huggingface_hub>=0.20.0",

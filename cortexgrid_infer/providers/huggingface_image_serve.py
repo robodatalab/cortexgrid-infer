@@ -60,9 +60,6 @@ def _pipeline_class(model_dir: Path) -> Any:
 
 @serve.ingress(_app)
 class HuggingFaceImageDeployment:
-    num_gpus = 1
-    num_replicas = 1
-
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         path = cortexgrid.load_model(family, suffix, run_name)
         self._device = detect_device()

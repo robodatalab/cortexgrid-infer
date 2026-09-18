@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import inspect
 from functools import partial
-import os
-import shutil
 from typing import Any, Callable, Sequence, get_type_hints
-
-from huggingface_hub import snapshot_download
 
 from cortexgrid_infer.core import Tool, ToolSpec
 
@@ -102,46 +98,3 @@ def build_tool_map(tools: Sequence[Tool] | None) -> dict[str, Callable[..., Any]
                 name = getattr(tool, "__name__", underlying.__name__)
                 tool_map[name] = tool
     return tool_map
-
-
-def parse_hf_id(hf_id: str) -> tuple[str, str]:
-    """Map an HF model id to a cortexgrid (family, suffix).
-
-    Strips the org (anything before the first '/'). Splits the remainder on
-    the last '-': the part before becomes family, the part after becomes
-    suffix. If there is no '-', suffix defaults to 'base'.
-    """
-    name = hf_id.split("/", 1)[-1]
-    if "-" not in name:
-        return name, "base"
-    family, _, suffix = name.rpartition("-")
-    return family, suffix
-
-
-def remove_hf_download_metadata(local_dir: str) -> None:
-    """Drop the `.cache/huggingface/` folder `snapshot_download(local_dir=...)`
-    writes into `local_dir`: HuggingFace's own download bookkeeping (etags,
-    commit hashes), not part of the model. Left in place, the registry upload
-    would store it along with the weights."""
-    shutil.rmtree(os.path.join(local_dir, ".cache", "huggingface"), ignore_errors=True)
-
-
-def download_hf_snapshot(
-    hf_id: str,
-    local_dir: str,
-    token: str | None,
-    ignore_patterns: list[str] | None = None,
-) -> str:
-    """Download an HF repo's model files into `local_dir` and return it.
-
-    Shaped as `cortexgrid.import_model`'s source (bound with `partial`), so the
-    download runs only when the weights actually have to be uploaded."""
-    snapshot_download(
-        repo_id=hf_id,
-        local_dir=local_dir,
-        ignore_patterns=ignore_patterns,
-        token=token,
-    )
-    remove_hf_download_metadata(local_dir)
-    return local_dir
-
