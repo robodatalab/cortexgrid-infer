@@ -29,44 +29,8 @@ log = logging.getLogger(__name__)
 _app = FastAPI()
 
 
-# The longest prompt this deployment accepts, and the model-card key that sets
-# it. Decode is a loop of forwards whose shapes follow the KV cache, so a prompt
-# longer than the cache was sized for resizes it and recompiles the loop - which
-# costs far more than compiling saves. Prompts are truncated to this instead, so
-# the shape holds. How long to allow is the deployment's call, not this
-# library's: it is paid for in VRAM whether or not a request uses it.
-MAX_INPUT_TOKENS_PARAM = "max_input_tokens"
-DEFAULT_MAX_INPUT_TOKENS = 4096
-
-
-def _max_input_tokens(family: str, suffix: str, run_name: str) -> int:
-    """The prompt limit this deployment was given, or the default.
-
-    Read from the model card so it can be changed in the dashboard and picked up
-    on the next deploy. A card that cannot be read, or holds something that is
-    not a positive integer, leaves the replica on the default rather than
-    refusing to load: the setting is a tuning knob, not a correctness one."""
-    try:
-        raw = cortexgrid.model_config(family, suffix, run_name).get(
-            MAX_INPUT_TOKENS_PARAM
-        )
-    except Exception as exc:  # noqa: BLE001 - optional setting, never fatal
-        log.warning("could not read %s/%s/%s's config: %s", family, suffix, run_name, exc)
-        return DEFAULT_MAX_INPUT_TOKENS
-    if raw is None:
-        return DEFAULT_MAX_INPUT_TOKENS
-    try:
-        tokens = int(raw)
-    except (TypeError, ValueError):
-        tokens = 0
-    if tokens <= 0:
-        log.warning(
-            "%s=%r on %s/%s/%s is not a positive integer; using %d",
-            MAX_INPUT_TOKENS_PARAM, raw, family, suffix, run_name,
-            DEFAULT_MAX_INPUT_TOKENS,
-        )
-        return DEFAULT_MAX_INPUT_TOKENS
-    return tokens
+# Used only by a model whose config states no context length of its own.
+FALLBACK_MAX_INPUT_TOKENS = 4096
 
 _RESERVED_BODY_KEYS = {
     "messages",
@@ -91,7 +55,9 @@ class HuggingFaceCompletingDeployment:
             str(path), torch_dtype=torch.float16
         )
         self._model.to(self._device)  # type: ignore
-        self._max_input_tokens = _max_input_tokens(family, suffix, run_name)
+        self._max_input_tokens = getattr(
+            self._model.config, "max_position_embeddings", FALLBACK_MAX_INPUT_TOKENS
+        )
         # A static cache of fixed length is what makes decode compilable: it
         # pins the shape every forward sees, so the loop is captured once
         # instead of recompiled per token. transformers then compiles `generate`
@@ -104,24 +70,13 @@ class HuggingFaceCompletingDeployment:
             config.compile_config = CompileConfig(mode=compiling.Mode.GRAPHED)
 
     def _truncate(self, inputs: Any) -> Any:
-        """Cut an over-long prompt down to the deployment's limit, loudly.
-
-        Keeps the *end* of the prompt: a chat template puts the system message
-        first and the turn to answer last, so dropping the head costs context
-        while dropping the tail would cost the instruction to reply at all.
-
-        Truncating rather than serving the long prompt is deliberate. The KV
-        cache is sized once, at the limit; a longer prompt would resize it and
-        recompile the decode loop, which is slower than the whole generation."""
+        """Cut an over-long prompt to what the model handles, keeping its end."""
         length = inputs["input_ids"].shape[-1]
         if length <= self._max_input_tokens:
             return inputs
         log.warning(
-            "truncating prompt from %d to %d tokens: the deployment's "
-            "%s. The dropped %d tokens are from the start of the prompt; raise "
-            "%s on the model card if they matter.",
-            length, self._max_input_tokens, MAX_INPUT_TOKENS_PARAM,
-            length - self._max_input_tokens, MAX_INPUT_TOKENS_PARAM,
+            "truncating prompt from %d to %d tokens, the model's context",
+            length, self._max_input_tokens,
         )
         for key, value in inputs.items():
             inputs[key] = value[..., -self._max_input_tokens :]

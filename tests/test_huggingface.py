@@ -45,6 +45,12 @@ class TestHuggingFaceCompletingImport(unittest.TestCase):
         self.assertIsNone(mock_snapshot.call_args.kwargs["ignore_patterns"])
 
 
+class _ModelConfig:
+    def __init__(self, max_position_embeddings=32768) -> None:
+        if max_position_embeddings is not None:
+            self.max_position_embeddings = max_position_embeddings
+
+
 class _GenerationConfig:
     def __init__(self) -> None:
         self.cache_implementation = None
@@ -53,7 +59,8 @@ class _GenerationConfig:
 
 
 class _FakeCausalLM:
-    def __init__(self) -> None:
+    def __init__(self, context=32768) -> None:
+        self.config = _ModelConfig(context)
         self.generation_config = _GenerationConfig()
         self.compiled_with: dict | None = None
         self.device = None
@@ -86,13 +93,11 @@ class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
             )
         return model
 
-    def test_pins_the_cache_length_so_every_request_shares_one_shape(self):
-        # A cache sized per request gives each prompt its own shape, and decode
-        # then recompiles per request instead of reusing one capture.
+    def test_pins_the_cache_to_the_models_context(self):
         model = self.build()
 
         self.assertEqual(model.generation_config.cache_implementation, "static")
-        self.assertEqual(model.generation_config.max_cache_len, 4096)
+        self.assertEqual(model.generation_config.max_cache_len, 32768)
 
     def test_asks_for_cuda_graphs_around_decode(self):
         model = self.build()
@@ -111,64 +116,6 @@ class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
         self.assertIsNone(model.generation_config.max_cache_len)
 
 
-class TestMaxInputTokensSetting(unittest.TestCase):
-    """How long the KV cache is pinned is the deployment's call, so it lives on
-    the model card and is editable there without re-importing."""
-
-    SERVE = "cortexgrid_infer.providers.huggingface_complete_serve"
-
-    def build(self, config: dict | Exception) -> _FakeCausalLM:
-        model = _FakeCausalLM()
-        cfg = mock.Mock(side_effect=config) if isinstance(config, Exception) \
-            else mock.Mock(return_value=config)
-        with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
-             mock.patch(f"{self.SERVE}.cortexgrid.model_config", cfg), \
-             mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
-                        return_value=model), \
-             mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cuda")):
-            HuggingFaceCompletingDeployment("family", "suffix", "imported")
-        return model
-
-    def test_the_card_sets_the_prompt_limit(self):
-        model = self.build({"max_input_tokens": "16384"})
-
-        self.assertEqual(model.generation_config.max_cache_len, 16384)
-
-    def test_falls_back_to_the_default_when_the_card_says_nothing(self):
-        model = self.build({})
-
-        self.assertEqual(model.generation_config.max_cache_len, 4096)
-
-    def test_a_nonsense_value_costs_the_setting_not_the_replica(self):
-        # Editable in a dashboard, so a bad value must not brick a deployment.
-        for bad in ("lots", "0", "-1", ""):
-            with self.subTest(value=bad):
-                with self.assertLogs(f"{self.SERVE}", "WARNING"):
-                    model = self.build({"max_input_tokens": bad})
-                self.assertEqual(model.generation_config.max_cache_len, 4096)
-
-    def test_an_unreadable_card_costs_the_setting_not_the_replica(self):
-        with self.assertLogs(f"{self.SERVE}", "WARNING"):
-            model = self.build(ValueError("no such model"))
-
-        self.assertEqual(model.generation_config.max_cache_len, 4096)
-
-
-class TestCompletingImportSeedsTheCard(unittest.TestCase):
-    def test_says_nothing_by_default(self):
-        self.assertEqual(HuggingFaceCompletingImport("org/model-x").config(), {})
-
-    def test_carries_the_prompt_limit_to_the_card(self):
-        imp = HuggingFaceCompletingImport("org/model-x", max_input_tokens=16384)
-
-        self.assertEqual(imp.config(), {"max_input_tokens": "16384"})
-
-    def test_rejects_a_limit_that_allows_no_prompt(self):
-        with self.assertRaises(ValueError):
-            HuggingFaceCompletingImport("org/model-x", max_input_tokens=0)
-
-
 class TestPromptTruncation(unittest.TestCase):
     """An over-long prompt would resize the KV cache and recompile the decode
     loop, which costs more than the whole generation. It is cut instead."""
@@ -176,10 +123,8 @@ class TestPromptTruncation(unittest.TestCase):
     SERVE = "cortexgrid_infer.providers.huggingface_complete_serve"
 
     def setUp(self) -> None:
-        model = _FakeCausalLM()
+        model = _FakeCausalLM(context=8)
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
-             mock.patch(f"{self.SERVE}.cortexgrid.model_config",
-                        return_value={"max_input_tokens": "8"}), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
@@ -212,10 +157,8 @@ class TestPromptTruncation(unittest.TestCase):
 
         self.assertEqual(kept["input_ids"][0].tolist(), list(range(12, 20)))
 
-    def test_says_how_much_it_dropped_and_what_to_raise(self):
+    def test_says_what_it_dropped(self):
         with self.assertLogs(self.SERVE, "WARNING") as logged:
             self.deployment._truncate(self.inputs(20))
 
-        message = logged.output[0]
-        self.assertIn("20", message)
-        self.assertIn("max_input_tokens", message)
+        self.assertIn("20", logged.output[0])

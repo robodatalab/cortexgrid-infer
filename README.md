@@ -158,23 +158,12 @@ Both serve apps are tuned rather than defaulted:
   itself, capturing prefill and decode separately, which it is better placed to
   do; compiling the module here as well would compile the same forward twice.
 
-  The fixed length is the point. A cache sized from each request's prompt gives
-  every prompt its own shape, and decode recompiles per request — far more
-  expensive than compiling saves. Pinned, one capture serves every request.
-
-  How long to pin it is the deployment's call, so it lives on the model card as
-  **`max_input_tokens`** (default 4096): the longest prompt the deployment
-  accepts, paid for in VRAM whether or not a request uses it. Set it at import
-  with `HuggingFaceCompletingImport(..., max_input_tokens=16384)`, or edit it on
-  the card in the dashboard and redeploy; an edited value is never overwritten
-  by a later import.
-
-  **A longer prompt is truncated, not served.** Resizing the cache would
-  recompile the decode loop, which costs more than the whole generation — so the
-  prompt is cut to the limit and the replica logs a warning saying how many
-  tokens went and which setting to raise. The *end* is kept: a chat template
-  puts the system message first and the turn to answer last, so dropping the
-  head costs context where dropping the tail would cost the instruction to reply.
+  The fixed length is the point, and it comes from the model: the cache is
+  pinned to `config.max_position_embeddings`. A prompt longer than that is
+  truncated to it — keeping the end, since a chat template puts the turn to
+  answer last — with a warning naming both lengths. Serving it instead would
+  resize the cache and recompile the decode loop, which costs more than the
+  generation itself.
 
 Neither asks to be configured, for the same reason the serve apps do not ask which
 dtype to load in. Both happen on CUDA and nowhere else — inductor is weakest off
@@ -247,7 +236,7 @@ serve app re-encodes them into the text form the client parses.
 
 | | |
 |---|---|
-| `HuggingFaceCompletingImport(hf_id, token=None, ignore_patterns=None, max_input_tokens=None)` | Importer for a causal LM. `max_input_tokens` seeds the card; see [Compilation](#compilation). |
+| `HuggingFaceCompletingImport(hf_id, token=None)` | Importer for a causal LM. |
 | `HuggingFaceImageImport(hf_id, token=None, ignore_patterns=None)` | Importer for a diffusers pipeline. |
 | `AnthropicImport(model_id, api_key_secret="ANTHROPIC_API_KEY")` | Importer for an Anthropic model; no weights. |
 | `ModelImport` | Base of all three: `family`, `suffix`, `serve_app`, `requirements()`, `config()`, `client(url)`. |
