@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import torch
 import unittest
 from unittest import mock
 
@@ -44,8 +45,23 @@ class TestHuggingFaceCompletingImport(unittest.TestCase):
         self.assertIsNone(mock_snapshot.call_args.kwargs["ignore_patterns"])
 
 
-class _FakeCausalLM:
+class _ModelConfig:
+    def __init__(self, max_position_embeddings=32768) -> None:
+        if max_position_embeddings is not None:
+            self.max_position_embeddings = max_position_embeddings
+
+
+class _GenerationConfig:
     def __init__(self) -> None:
+        self.cache_implementation = None
+        self.max_cache_len = None
+        self.compile_config = None
+
+
+class _FakeCausalLM:
+    def __init__(self, context=32768) -> None:
+        self.config = _ModelConfig(context)
+        self.generation_config = _GenerationConfig()
         self.compiled_with: dict | None = None
         self.device = None
 
@@ -77,16 +93,72 @@ class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
             )
         return model
 
-    def test_fuses_without_capturing(self):
-        # Decode's shapes move as the sequence grows, so a captured graph would
-        # recompile per input length rather than be reused.
+    def test_pins_the_cache_to_the_models_context(self):
         model = self.build()
 
-        self.assertTrue(self.deployment._compiled)
-        self.assertEqual(model.compiled_with, {"mode": "default"})
+        self.assertEqual(model.generation_config.cache_implementation, "static")
+        self.assertEqual(model.generation_config.max_cache_len, 32768)
+
+    def test_asks_for_cuda_graphs_around_decode(self):
+        model = self.build()
+
+        self.assertEqual(model.generation_config.compile_config.mode, "reduce-overhead")
+
+    def test_leaves_the_module_for_transformers_to_compile(self):
+        # Compiling it here too would compile the same forward twice.
+        self.assertIsNone(self.build().compiled_with)
 
     def test_stays_eager_off_cuda(self):
         model = self.build(device="cpu")
 
         self.assertFalse(self.deployment._compiled)
-        self.assertIsNone(model.compiled_with)
+        self.assertIsNone(model.generation_config.cache_implementation)
+        self.assertIsNone(model.generation_config.max_cache_len)
+
+
+class TestPromptTruncation(unittest.TestCase):
+    """An over-long prompt would resize the KV cache and recompile the decode
+    loop, which costs more than the whole generation. It is cut instead."""
+
+    SERVE = "cortexgrid_infer.providers.huggingface_complete_serve"
+
+    def setUp(self) -> None:
+        model = _FakeCausalLM(context=8)
+        with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
+             mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
+             mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
+                        return_value=model), \
+             mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cuda")):
+            self.deployment = HuggingFaceCompletingDeployment(
+                "family", "suffix", "imported"
+            )
+
+    def inputs(self, length: int) -> dict:
+        row = torch.arange(length).unsqueeze(0)
+        return {"input_ids": row, "attention_mask": torch.ones_like(row)}
+
+    def test_leaves_a_prompt_within_the_limit_alone(self):
+        kept = self.deployment._truncate(self.inputs(8))
+
+        self.assertEqual(kept["input_ids"].shape[-1], 8)
+
+    def test_cuts_an_over_long_prompt_to_the_limit(self):
+        with self.assertLogs(self.SERVE, "WARNING"):
+            kept = self.deployment._truncate(self.inputs(20))
+
+        self.assertEqual(kept["input_ids"].shape[-1], 8)
+        self.assertEqual(kept["attention_mask"].shape[-1], 8)
+
+    def test_keeps_the_end_of_the_prompt(self):
+        # A chat template puts the turn to answer last; dropping the tail would
+        # cost the instruction to reply at all.
+        with self.assertLogs(self.SERVE, "WARNING"):
+            kept = self.deployment._truncate(self.inputs(20))
+
+        self.assertEqual(kept["input_ids"][0].tolist(), list(range(12, 20)))
+
+    def test_says_what_it_dropped(self):
+        with self.assertLogs(self.SERVE, "WARNING") as logged:
+            self.deployment._truncate(self.inputs(20))
+
+        self.assertIn("20", logged.output[0])

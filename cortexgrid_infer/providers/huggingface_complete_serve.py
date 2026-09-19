@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from threading import Thread
 from typing import Any
@@ -11,15 +12,25 @@ import cortexgrid
 from cortexgrid import serve
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    CompileConfig,
+    TextIteratorStreamer,
+)
 import torch
 
 from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
 
 
+log = logging.getLogger(__name__)
+
 _app = FastAPI()
 
+
+# Used only by a model whose config states no context length of its own.
+FALLBACK_MAX_INPUT_TOKENS = 4096
 
 _RESERVED_BODY_KEYS = {
     "messages",
@@ -44,10 +55,32 @@ class HuggingFaceCompletingDeployment:
             str(path), torch_dtype=torch.float16
         )
         self._model.to(self._device)  # type: ignore
-        # Decode's shapes move as the sequence grows, so fuse without capturing.
-        self._compiled = compiling.compile_module(
-            self._model, self._device, compiling.Mode.FUSED, label="model"
+        self._max_input_tokens = getattr(
+            self._model.config, "max_position_embeddings", FALLBACK_MAX_INPUT_TOKENS
         )
+        # A static cache of fixed length is what makes decode compilable: it
+        # pins the shape every forward sees, so the loop is captured once
+        # instead of recompiled per token. transformers then compiles `generate`
+        # itself, which is why the module is not compiled here as well.
+        self._compiled = compiling.supported(self._device)
+        if self._compiled:
+            config = self._model.generation_config
+            config.cache_implementation = "static"
+            config.max_cache_len = self._max_input_tokens
+            config.compile_config = CompileConfig(mode=compiling.Mode.GRAPHED)
+
+    def _truncate(self, inputs: Any) -> Any:
+        """Cut an over-long prompt to what the model handles, keeping its end."""
+        length = inputs["input_ids"].shape[-1]
+        if length <= self._max_input_tokens:
+            return inputs
+        log.warning(
+            "truncating prompt from %d to %d tokens, the model's context",
+            length, self._max_input_tokens,
+        )
+        for key, value in inputs.items():
+            inputs[key] = value[..., -self._max_input_tokens :]
+        return inputs
 
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:
@@ -66,7 +99,9 @@ class HuggingFaceCompletingDeployment:
             tokenize=False,
             add_generation_prompt=True,
         )
-        inputs = self._tokenizer(prompt, return_tensors="pt").to(self._model.device)
+        inputs = self._truncate(self._tokenizer(prompt, return_tensors="pt")).to(
+            self._model.device
+        )
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         error: list[BaseException] = []

@@ -152,12 +152,18 @@ Both serve apps are tuned rather than defaulted:
   whole loop. The VAE is left alone: smallest win of the three, and the one whose
   shapes move most, especially with tiling on.
 - **`HuggingFaceCompletingDeployment`** does *not* compile the module. Decode has
-  no stable shape until the KV cache is static, so it sets
-  `cache_implementation="static"` and a `CompileConfig(mode=Mode.GRAPHED)`, and
-  transformers compiles `generate` itself — capturing prefill and decode
-  separately, which it is better placed to do. Compiling the module here as well
-  would only compile the same forward twice. The cost is VRAM: a static cache is
-  preallocated to the length asked for, where a dynamic one grows into it.
+  no stable shape of its own — the sequence grows a token per forward — so it
+  pins one: `cache_implementation="static"` with a fixed `max_cache_len`, plus a
+  `CompileConfig(mode=Mode.GRAPHED)`. transformers then compiles `generate`
+  itself, capturing prefill and decode separately, which it is better placed to
+  do; compiling the module here as well would compile the same forward twice.
+
+  The fixed length is the point, and it comes from the model: the cache is
+  pinned to `config.max_position_embeddings`. A prompt longer than that is
+  truncated to it — keeping the end, since a chat template puts the turn to
+  answer last — with a warning naming both lengths. Serving it instead would
+  resize the cache and recompile the decode loop, which costs more than the
+  generation itself.
 
 Neither asks to be configured, for the same reason the serve apps do not ask which
 dtype to load in. Both happen on CUDA and nowhere else — inductor is weakest off
