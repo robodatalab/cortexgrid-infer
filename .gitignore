@@ -10,3 +10,4 @@ venv/
 .env
 .claude
 .mypy_cache/
+uv.lock
