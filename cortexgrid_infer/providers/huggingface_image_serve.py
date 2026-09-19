@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from PIL import Image, ImageOps
 import torch
 
+from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
 
 
@@ -70,6 +71,10 @@ class HuggingFaceImageDeployment:
         if vae is not None and hasattr(vae, "enable_tiling"):
             vae.enable_tiling()
         self._pipe = pipe
+        # A denoising schedule is a loop of identically shaped forwards: capture once, replay.
+        self._compiled = compiling.compile_pipeline(
+            pipe, self._device, compiling.Mode.GRAPHED
+        )
 
     @_app.post("/generate")
     async def generate(self, body: dict[str, Any]) -> dict[str, Any]:

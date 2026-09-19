@@ -123,6 +123,58 @@ the whole model onto a single device. A model too large for any one card needs a
 app that shards it, not a larger `num_gpus`: the requirement would simply never be
 placed. (`AnthropicImport` asks for none — it holds no weights.)
 
+## Compilation
+
+Both HuggingFace serve apps run `torch.compile` over the model they load, because
+eager PyTorch bills per *operation* and a transformer forward is mostly glue —
+views, broadcasts, permutes, elementwise adds — with only a small fraction of the
+dispatches being the matrix multiplies that do the arithmetic. While the tensors
+are large the host stays ahead of the accelerator and none of that shows; once
+they are small, the accelerator drains its queue faster than the host can fill it
+and step time tracks the operation count rather than the work. Feeding the model
+less then stops helping, because the op count does not shrink with the input.
+Inductor fuses the glue away; `reduce-overhead` additionally captures a CUDA graph,
+so a step replays one graph instead of thousands of launches.
+
+`cortexgrid_infer.compiling` offers two modes, and a serve app picks the one that
+fits the work it does:
+
+| | | for |
+|---|---|---|
+| `Mode.GRAPHED` (`reduce-overhead`) | fuses **and** captures a CUDA graph, so a forward replays one graph instead of issuing its launches | a loop of identically shaped forwards, where the capture is reused every iteration. A graph cannot go dynamic, so each distinct shape captures separately |
+| `Mode.FUSED` (`default`) | fuses only | work whose shapes move under it, where there is nothing stable to capture and dynamo is free to compile one dynamic kernel set for all of them |
+
+Both serve apps are tuned rather than defaulted:
+
+- **`HuggingFaceImageDeployment`** compiles the denoiser (`transformer` or `unet`)
+  and every `text_encoder*` as `Mode.GRAPHED`. A denoising schedule is the ideal case —
+  every step is the same shapes — so the capture is made once and replayed for the
+  whole loop. The VAE is left alone: smallest win of the three, and the one whose
+  shapes move most, especially with tiling on.
+- **`HuggingFaceCompletingDeployment`** does *not* compile the module. Decode has
+  no stable shape until the KV cache is static, so it sets
+  `cache_implementation="static"` and a `CompileConfig(mode=Mode.GRAPHED)`, and
+  transformers compiles `generate` itself — capturing prefill and decode
+  separately, which it is better placed to do. Compiling the module here as well
+  would only compile the same forward twice. The cost is VRAM: a static cache is
+  preallocated to the length asked for, where a dynamic one grows into it.
+
+Neither asks to be configured, for the same reason the serve apps do not ask which
+dtype to load in. Both happen on CUDA and nowhere else — inductor is weakest off
+it, and a host outrunning its accelerator is a GPU problem to begin with.
+
+Two things worth knowing:
+
+- **Warm-up is per input shape, and lands on a request.** Compilation is lazy, so
+  the first request at each image size — or each prompt and generation length —
+  pays for it.
+- **Compilation never becomes load-bearing.** A backend that cannot compile a model
+  falls back to eager rather than failing the deployment.
+
+It does not fix everything. Every forward re-reads the model's whole weight tensor
+from memory, and no amount of fusion makes that read smaller. Below some input size
+it is the floor; only quantizing the weights or running fewer forwards moves it.
+
 ## Inference
 
 `complete` streams `CompletionChunk`s (`.content`, `.tool_calls`, `.finish_reason`):
@@ -189,6 +241,8 @@ serve app re-encodes them into the text form the client parses.
 | `HuggingFaceImageModel(url, model_id)` | Client for a deployed diffusers app. |
 | `split_model_id(model_id) -> (family, suffix)` | The registry identity an importer derives. |
 | `detect_device()` | The torch device a serve app should load onto. |
+| `compiling.Mode.GRAPHED` / `compiling.Mode.FUSED` | The two modes a serve app chooses between. See [Compilation](#compilation). |
+| `compiling.supported(device)` / `compile_module(module, device, mode)` / `compile_pipeline(pipe, device, mode)` | Whether to compile here, and what a serve app calls to do it. |
 | `ModelDeployFailed` | Re-exported from cortexgrid; subclasses `RuntimeError`. |
 
 Types: `DeployedModel`, `CompletingModel`, `GeneratingModel`, `CompletionChunk`,
