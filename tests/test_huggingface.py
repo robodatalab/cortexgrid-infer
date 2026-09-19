@@ -44,15 +44,8 @@ class TestHuggingFaceCompletingImport(unittest.TestCase):
         self.assertIsNone(mock_snapshot.call_args.kwargs["ignore_patterns"])
 
 
-class _GenerationConfig:
-    def __init__(self) -> None:
-        self.cache_implementation = None
-        self.compile_config = None
-
-
 class _FakeCausalLM:
     def __init__(self) -> None:
-        self.generation_config = _GenerationConfig()
         self.compiled_with: dict | None = None
         self.device = None
 
@@ -69,11 +62,7 @@ class _Device:
         self.type = type_
 
 
-class TestHuggingFaceCompletingDeploymentIsTunedForDecode(unittest.TestCase):
-    """Decode has no stable shape to capture until the KV cache is static, and
-    given one transformers compiles `generate` itself; see
-    cortexgrid_infer.compiling."""
-
+class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
     SERVE = "cortexgrid_infer.providers.huggingface_complete_serve"
 
     def build(self, device: str = "cuda") -> _FakeCausalLM:
@@ -88,26 +77,16 @@ class TestHuggingFaceCompletingDeploymentIsTunedForDecode(unittest.TestCase):
             )
         return model
 
-    def test_makes_the_kv_cache_static_so_generate_can_be_captured(self):
+    def test_fuses_without_capturing(self):
+        # Decode's shapes move as the sequence grows, so a captured graph would
+        # recompile per input length rather than be reused.
         model = self.build()
 
         self.assertTrue(self.deployment._compiled)
-        self.assertEqual(model.generation_config.cache_implementation, "static")
-
-    def test_asks_for_cuda_graphs_around_the_decode_step(self):
-        model = self.build()
-
-        self.assertEqual(model.generation_config.compile_config.mode, "reduce-overhead")
-
-    def test_leaves_the_module_for_transformers_to_compile(self):
-        # Compiling it here too would compile the same forward twice.
-        model = self.build()
-
-        self.assertIsNone(model.compiled_with)
+        self.assertEqual(model.compiled_with, {"mode": "default"})
 
     def test_stays_eager_off_cuda(self):
         model = self.build(device="cpu")
 
         self.assertFalse(self.deployment._compiled)
-        self.assertIsNone(model.generation_config.cache_implementation)
-        self.assertIsNone(model.generation_config.compile_config)
+        self.assertIsNone(model.compiled_with)
