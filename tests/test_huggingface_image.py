@@ -175,7 +175,7 @@ class _Device:
 
 
 class TestHuggingFaceImageDeploymentCompiles(unittest.TestCase):
-    """The deployment arms torch.compile at construction; see
+    """The deployment compiles at construction; see
     cortexgrid_infer.compiling for why the denoiser is where it pays."""
 
     SERVE = "cortexgrid_infer.providers.huggingface_image_serve"

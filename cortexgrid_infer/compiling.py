@@ -29,12 +29,15 @@ class Mode(StrEnum):
 
 
 def supported(device: Any) -> bool:
-    """Whether compiling is worth arming on this device."""
+    """Whether compiling is worth doing on this device."""
     return getattr(device, "type", None) == _ACCELERATOR
 
 
 def compile_module(module: Any, device: Any, mode: Mode, label: str = "model") -> bool:
-    """Arm compilation of one module's forward, in place. Returns whether it was armed."""
+    """Compile one module's forward, in place. Returns whether it was compiled.
+
+    Lazily, as `torch.compile` always is: the first forward through each input
+    shape is the one that pays."""
     if module is None or not supported(device):
         return False
     try:
@@ -48,13 +51,13 @@ def compile_module(module: Any, device: Any, mode: Mode, label: str = "model") -
 
 
 def compile_pipeline(pipe: Any, device: Any, mode: Mode) -> list[str]:
-    """Arm compilation of a diffusers pipeline's denoiser and text encoders."""
-    armed = []
+    """Compile a diffusers pipeline's denoiser and text encoders. Returns which."""
+    compiled = []
     for attr in (*_DENOISER_ATTRS, *_TEXT_ENCODER_ATTRS):
         module = getattr(pipe, attr, None)
         if module is not None and compile_module(module, device, mode, label=attr):
-            armed.append(attr)
-    return armed
+            compiled.append(attr)
+    return compiled
 
 
 def _fall_back_to_eager_on_failure() -> None:
