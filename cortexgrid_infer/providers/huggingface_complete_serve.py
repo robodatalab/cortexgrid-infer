@@ -11,9 +11,15 @@ import cortexgrid
 from cortexgrid import serve
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    CompileConfig,
+    TextIteratorStreamer,
+)
 import torch
 
+from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
 
 
@@ -43,6 +49,14 @@ class HuggingFaceCompletingDeployment:
             str(path), torch_dtype=torch.float16
         )
         self._model.to(self._device)  # type: ignore
+        # Decode has no stable shape to capture until the cache is static; given one,
+        # transformers compiles `generate` itself, so compiling the module would double up.
+        self._compiled = compiling.supported(self._device)
+        if self._compiled:
+            self._model.generation_config.cache_implementation = "static"
+            self._model.generation_config.compile_config = CompileConfig(
+                mode=compiling.Mode.GRAPHED
+            )
 
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:

@@ -17,7 +17,9 @@ dependencies = [
     # redundant PUT - which is why this library has no reuse guard of its own.
     "cortexgrid>=0.3.4",
     "torch>=2.0.0",
-    "transformers>=4.40.0",
+    # 4.47: CompileConfig, which the completion serve app hands to `generate`
+    # alongside a static cache so transformers compiles the decode step itself.
+    "transformers>=4.47.0",
     "huggingface_hub>=0.20.0",
     "anthropic>=0.40.0",
     "python-dotenv>=1.0.0",
