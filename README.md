@@ -158,16 +158,25 @@ Both serve apps are tuned rather than defaulted:
   itself, capturing prefill and decode separately, which it is better placed to
   do; compiling the module here as well would compile the same forward twice.
 
-  The fixed length is the point, and it comes from the model: the cache is
-  pinned to `config.max_position_embeddings`. A prompt longer than that is
-  truncated to it — keeping the end, since a chat template puts the turn to
-  answer last — with a warning naming both lengths. Serving it instead would
-  resize the cache and recompile the decode loop, which costs more than the
-  generation itself.
+  The fixed length is the point, and how long it is decides what decode costs:
+  every token's attention reads the whole cache, filled or not. That is why it is
+  *not* pinned to the model's context — 32k slots of a Qwen2.5-3B KV cache is
+  1.2 GB of keys and values re-read per generated token, several times the
+  traffic of the model's own weights, to make room for a prompt nobody sent. It
+  is pinned instead to the prompt and reply a caller plausibly sends: 4096 tokens,
+  or `max_total_tokens` on the model card, never past the model's own
+  `max_position_embeddings`. A reply takes at most half of it, so an
+  over-optimistic `max_new_tokens` cannot squeeze the prompt to nothing, and a
+  prompt that will not fit in the rest is truncated — keeping the end, since a
+  chat template puts the turn to answer last — with a warning naming both
+  lengths. Serving it whole would resize the cache and recompile the decode loop,
+  which costs more than the generation itself.
 
-Neither asks to be configured, for the same reason the serve apps do not ask which
-dtype to load in. Both happen on CUDA and nowhere else — inductor is weakest off
-it, and a host outrunning its accelerator is a GPU problem to begin with.
+The image app asks to be configured for nothing, for the same reason neither asks
+which dtype to load in; the completion app takes `max_total_tokens` alone, because
+how much cache a caller needs is the one thing the model cannot tell it. Both
+happen on CUDA and nowhere else — inductor is weakest off it, and a host
+outrunning its accelerator is a GPU problem to begin with.
 
 Two things worth knowing:
 

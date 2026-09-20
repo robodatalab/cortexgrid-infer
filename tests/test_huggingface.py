@@ -81,9 +81,12 @@ class _Device:
 class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
     SERVE = "cortexgrid_infer.providers.huggingface_complete_serve"
 
-    def build(self, device: str = "cuda") -> _FakeCausalLM:
-        model = _FakeCausalLM()
+    def build(self, device: str = "cuda", config: dict | None = None,
+              context: int = 32768) -> _FakeCausalLM:
+        model = _FakeCausalLM(context)
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
+             mock.patch(f"{self.SERVE}.cortexgrid.model_config",
+                        return_value=config or {}), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
@@ -93,11 +96,32 @@ class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
             )
         return model
 
-    def test_pins_the_cache_to_the_models_context(self):
+    def test_pins_the_cache_to_the_budget_not_the_models_context(self):
+        # Every decoded token reads the whole cache, so a 32k context costs 8x
+        # the 4k default in keys and values re-read per token.
         model = self.build()
 
         self.assertEqual(model.generation_config.cache_implementation, "static")
-        self.assertEqual(model.generation_config.max_cache_len, 32768)
+        self.assertEqual(model.generation_config.max_cache_len, 4096)
+
+    def test_takes_the_budget_from_the_model_card(self):
+        model = self.build(config={"max_total_tokens": "1024"})
+
+        self.assertEqual(model.generation_config.max_cache_len, 1024)
+        self.assertEqual(self.deployment._max_total_tokens, 1024)
+
+    def test_never_asks_for_more_than_the_model_holds(self):
+        model = self.build(config={"max_total_tokens": "65536"}, context=8192)
+
+        self.assertEqual(model.generation_config.max_cache_len, 8192)
+
+    def test_caps_a_reply_at_half_the_budget(self):
+        # Otherwise a caller asking for more output than the replica is sized
+        # for would leave the prompt no room at all.
+        self.build()
+
+        self.assertEqual(self.deployment._room_for_the_reply(256), 256)
+        self.assertEqual(self.deployment._room_for_the_reply(16 * 1024), 2048)
 
     def test_asks_for_cuda_graphs_around_decode(self):
         model = self.build()
@@ -125,6 +149,7 @@ class TestPromptTruncation(unittest.TestCase):
     def setUp(self) -> None:
         model = _FakeCausalLM(context=8)
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
+             mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value={}), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
@@ -138,13 +163,13 @@ class TestPromptTruncation(unittest.TestCase):
         return {"input_ids": row, "attention_mask": torch.ones_like(row)}
 
     def test_leaves_a_prompt_within_the_limit_alone(self):
-        kept = self.deployment._truncate(self.inputs(8))
+        kept = self.deployment._truncate(self.inputs(8), 8)
 
         self.assertEqual(kept["input_ids"].shape[-1], 8)
 
     def test_cuts_an_over_long_prompt_to_the_limit(self):
         with self.assertLogs(self.SERVE, "WARNING"):
-            kept = self.deployment._truncate(self.inputs(20))
+            kept = self.deployment._truncate(self.inputs(20), 8)
 
         self.assertEqual(kept["input_ids"].shape[-1], 8)
         self.assertEqual(kept["attention_mask"].shape[-1], 8)
@@ -153,12 +178,12 @@ class TestPromptTruncation(unittest.TestCase):
         # A chat template puts the turn to answer last; dropping the tail would
         # cost the instruction to reply at all.
         with self.assertLogs(self.SERVE, "WARNING"):
-            kept = self.deployment._truncate(self.inputs(20))
+            kept = self.deployment._truncate(self.inputs(20), 8)
 
         self.assertEqual(kept["input_ids"][0].tolist(), list(range(12, 20)))
 
     def test_says_what_it_dropped(self):
         with self.assertLogs(self.SERVE, "WARNING") as logged:
-            self.deployment._truncate(self.inputs(20))
+            self.deployment._truncate(self.inputs(20), 8)
 
         self.assertIn("20", logged.output[0])
