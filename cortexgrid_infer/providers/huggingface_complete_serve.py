@@ -29,8 +29,14 @@ log = logging.getLogger(__name__)
 _app = FastAPI()
 
 
-# Used only by a model whose config states no context length of its own.
-FALLBACK_MAX_INPUT_TOKENS = 4096
+# Prompt + reply a replica is sized for. The static cache is allocated at this
+# many slots and every decoded token reads all of them, filled or not: at
+# Qwen2.5-3B's 32k context that is 1.2 GB of keys and values re-read per token,
+# which costs far more than the prompt it makes room for. So the default is what
+# a caller plausibly sends rather than what the model could hold; a model that
+# needs more takes `max_total_tokens` on its model card, up to its own context.
+MAX_TOTAL_TOKENS_PARAM = "max_total_tokens"
+DEFAULT_MAX_TOTAL_TOKENS = 4096
 
 _RESERVED_BODY_KEYS = {
     "messages",
@@ -55,8 +61,12 @@ class HuggingFaceCompletingDeployment:
             str(path), torch_dtype=torch.float16
         )
         self._model.to(self._device)  # type: ignore
-        self._max_input_tokens = getattr(
-            self._model.config, "max_position_embeddings", FALLBACK_MAX_INPUT_TOKENS
+        settings = cortexgrid.model_config(family, suffix, run_name)
+        context = getattr(
+            self._model.config, "max_position_embeddings", DEFAULT_MAX_TOTAL_TOKENS
+        )
+        self._max_total_tokens = min(
+            int(settings.get(MAX_TOTAL_TOKENS_PARAM, DEFAULT_MAX_TOTAL_TOKENS)), context
         )
         # A static cache of fixed length is what makes decode compilable: it
         # pins the shape every forward sees, so the loop is captured once
@@ -66,27 +76,39 @@ class HuggingFaceCompletingDeployment:
         if self._compiled:
             config = self._model.generation_config
             config.cache_implementation = "static"
-            config.max_cache_len = self._max_input_tokens
+            config.max_cache_len = self._max_total_tokens
             config.compile_config = CompileConfig(mode=compiling.Mode.GRAPHED)
 
-    def _truncate(self, inputs: Any) -> Any:
-        """Cut an over-long prompt to what the model handles, keeping its end."""
+    def _room_for_the_reply(self, requested: int) -> int:
+        """How many tokens a reply may take, leaving the prompt the rest.
+
+        Half the budget at most, so a caller asking for more output than the
+        replica is sized for cannot squeeze the prompt down to nothing."""
+        return min(requested, self._max_total_tokens // 2)
+
+    def _truncate(self, inputs: Any, limit: int) -> Any:
+        """Cut an over-long prompt to ``limit`` tokens, keeping its end.
+
+        A prompt and reply that together outgrew the cache would reallocate it
+        and recompile the decode loop, which costs more than the generation."""
         length = inputs["input_ids"].shape[-1]
-        if length <= self._max_input_tokens:
+        if length <= limit:
             return inputs
         log.warning(
-            "truncating prompt from %d to %d tokens, the model's context",
-            length, self._max_input_tokens,
+            "truncating prompt from %d to %d tokens, the room this replica has",
+            length, limit,
         )
         for key, value in inputs.items():
-            inputs[key] = value[..., -self._max_input_tokens :]
+            inputs[key] = value[..., -limit:]
         return inputs
 
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:
         messages = body["messages"]
         tools = body.get("tools")
-        max_new_tokens = body.get("max_new_tokens", 16 * 1024)
+        max_new_tokens = self._room_for_the_reply(
+            body.get("max_new_tokens", self._max_total_tokens)
+        )
         temperature = body.get("temperature", 0.7)
         top_p = body.get("top_p", 0.9)
         top_k = body.get("top_k", 50)
@@ -99,9 +121,10 @@ class HuggingFaceCompletingDeployment:
             tokenize=False,
             add_generation_prompt=True,
         )
-        inputs = self._truncate(self._tokenizer(prompt, return_tensors="pt")).to(
-            self._model.device
-        )
+        inputs = self._truncate(
+            self._tokenizer(prompt, return_tensors="pt"),
+            self._max_total_tokens - max_new_tokens,
+        ).to(self._model.device)
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         error: list[BaseException] = []
