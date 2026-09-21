@@ -4,14 +4,17 @@ model.
 
 There is no one loader for image-to-mesh models the way `AutoModelForCausalLM`
 or a diffusers `model_index.json` serves a whole family of repos: each model
-ships its own code. So a model's serve app subclasses `MeshingDeployment` and
-supplies `load` and `make_mesh`; the subclass inherits the route, whose protocol
-is `cortexgrid_infer.meshing`'s. cortexgrid bundles the subclass's own file, so
-the model's code travels with it.
+ships its own code. So a model's serve app subclasses `Image2Mesh` and supplies
+`load` and `make_mesh`; the subclass inherits the route, whose protocol is
+`cortexgrid_infer.meshing`'s, and the client that speaks it. cortexgrid bundles
+the subclass's own file, so the model's code travels with it.
 
-    class MyMeshDeployment(MeshingDeployment):
+    class MyMesh(Image2Mesh):
+        min_vram_gb = 6.0
         def load(self, path, device): ...
         def make_mesh(self, image, **options) -> GeneratedMesh: ...
+
+    imp = HuggingFaceImporter("org/my-mesh-model", MyMesh)
 """
 
 from __future__ import annotations
@@ -31,14 +34,23 @@ import torch
 from cortexgrid_infer import meshing
 from cortexgrid_infer.core import GeneratedMesh
 from cortexgrid_infer.device import detect_device
+from cortexgrid_infer.meshing import ServedMeshingModel
+from cortexgrid_infer.models.base import LocalModel
 
 
 _app = FastAPI()
 
 
 @serve.ingress(_app)
-class MeshingDeployment:
-    """One replica of an image-to-mesh model."""
+class Image2Mesh(LocalModel):
+    """One replica of an image-to-mesh model.
+
+    A subclass sets `min_vram_gb` where meshing takes memory the weights do not
+    show - querying the model over a whole 3D grid usually does."""
+
+    @classmethod
+    def client(cls, url: str, name: str) -> ServedMeshingModel:
+        return ServedMeshingModel(url=url, model_id=name)
 
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         self.device = detect_device()

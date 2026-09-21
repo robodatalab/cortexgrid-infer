@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.providers.anthropic and its serve app."""
+"""Tests for cortexgrid_infer.models.anthropic, registered as a Hosted entry."""
 
 from __future__ import annotations
 
@@ -8,54 +8,53 @@ from unittest import mock
 import cortexgrid
 
 from cortexgrid_infer.completion import ServedCompletingModel
-from cortexgrid_infer.providers.anthropic import AnthropicImport
-from cortexgrid_infer.providers.anthropic_serve import (
-    AnthropicDeployment,
+from cortexgrid_infer.models.anthropic import (
+    AnthropicText2Text,
     to_anthropic_messages,
     to_anthropic_tools,
 )
+from cortexgrid_infer.registry import Hosted
+
+SERVE = "cortexgrid_infer.models.anthropic"
 
 
-class TestAnthropicImport(unittest.TestCase):
+class TestHostedAnthropic(unittest.TestCase):
     def test_names_the_model_for_the_registry(self):
-        imp = AnthropicImport("claude-sonnet-5")
-        self.assertEqual((imp.family, imp.suffix), ("claude-sonnet", "5"))
-
-    def test_bundles_the_forwarding_serve_app(self):
-        self.assertIs(AnthropicImport("claude-sonnet-5").serve_app, AnthropicDeployment)
+        entry = Hosted("claude-sonnet-5", AnthropicText2Text)
+        self.assertEqual((entry.family, entry.suffix), ("claude-sonnet", "5"))
 
     def test_client_is_the_shared_completion_client(self):
-        # The serve app speaks the same /complete protocol as a HuggingFace one,
-        # so there is nothing Anthropic-specific left on the client side.
-        model = AnthropicImport("claude-sonnet-5").client("http://h/r/F/S/R")
+        # The serve app speaks the same /complete protocol as Text2Text, so
+        # there is nothing Anthropic-specific left on the client side.
+        model = Hosted("claude-sonnet-5", AnthropicText2Text).client("http://h/r/F/S/R")
         self.assertIsInstance(model, ServedCompletingModel)
         self.assertEqual(model.name, "claude-sonnet-5")
 
     def test_asks_for_no_hardware(self):
-        # A replica holds no weights and does no compute, so it is placeable on
-        # a CPU-only node.
         self.assertEqual(
-            AnthropicImport("claude-sonnet-5").requirements(),
+            Hosted("claude-sonnet-5", AnthropicText2Text).requirements(),
             cortexgrid.ModelRequirements(),
         )
 
     def test_config_carries_what_the_deployment_needs_to_call_out(self):
         self.assertEqual(
-            AnthropicImport("claude-sonnet-5").config(),
+            Hosted("claude-sonnet-5", AnthropicText2Text).config(),
             {"model": "claude-sonnet-5", "api_key_secret": "ANTHROPIC_API_KEY"},
         )
 
     def test_config_stores_the_secret_name_never_the_key(self):
         # Registry entries are readable by anyone who can see the model, so the
         # entry names a cortexgrid secret and the deployment resolves it.
-        config = AnthropicImport("claude-sonnet-5", api_key_secret="TEAM_KEY").config()
+        config = Hosted(
+            "claude-sonnet-5", AnthropicText2Text, api_key_secret="TEAM_KEY"
+        ).config()
 
         self.assertEqual(config["api_key_secret"], "TEAM_KEY")
 
 
-class TestAnthropicDeploymentConfig(unittest.TestCase):
-    @mock.patch("cortexgrid_infer.providers.anthropic_serve.AsyncAnthropic")
-    @mock.patch("cortexgrid_infer.providers.anthropic_serve.cortexgrid")
+class TestAnthropicText2TextConfig(unittest.TestCase):
+    @mock.patch(f"{SERVE}.AsyncAnthropic")
+    @mock.patch(f"{SERVE}.cortexgrid")
     def test_reads_its_settings_from_the_entry_it_was_built_for(
         self, mock_cortexgrid: mock.Mock, mock_client: mock.Mock
     ):
@@ -65,7 +64,7 @@ class TestAnthropicDeploymentConfig(unittest.TestCase):
         }
         mock_cortexgrid.get_secret.return_value = "sk-ant-xxx"
 
-        deployment = AnthropicDeployment("claude-sonnet", "5", "imported")
+        deployment = AnthropicText2Text("claude-sonnet", "5", "imported")
 
         mock_cortexgrid.model_config.assert_called_once_with(
             "claude-sonnet", "5", "imported"
@@ -74,8 +73,8 @@ class TestAnthropicDeploymentConfig(unittest.TestCase):
         mock_client.assert_called_once_with(api_key="sk-ant-xxx")
         self.assertEqual(deployment._model, "claude-sonnet-5")
 
-    @mock.patch("cortexgrid_infer.providers.anthropic_serve.AsyncAnthropic")
-    @mock.patch("cortexgrid_infer.providers.anthropic_serve.cortexgrid")
+    @mock.patch(f"{SERVE}.AsyncAnthropic")
+    @mock.patch(f"{SERVE}.cortexgrid")
     def test_says_what_is_missing_from_the_entry(
         self, mock_cortexgrid: mock.Mock, _mock_client: mock.Mock
     ):
@@ -84,7 +83,7 @@ class TestAnthropicDeploymentConfig(unittest.TestCase):
         mock_cortexgrid.model_config.return_value = {"model": "claude-sonnet-5"}
 
         with self.assertRaises(RuntimeError) as caught:
-            AnthropicDeployment("claude-sonnet", "5", "imported")
+            AnthropicText2Text("claude-sonnet", "5", "imported")
 
         self.assertIn("api_key_secret", str(caught.exception))
 

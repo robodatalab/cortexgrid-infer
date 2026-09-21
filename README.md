@@ -6,19 +6,47 @@ needs but cannot work out for itself, plus the clients that talk to what it depl
 cortexgrid stores whatever weights it is handed under whatever key it is given, and
 serves them with whatever class it was told to bundle. It deliberately knows nothing
 about where a model came from or what shape it is. This library supplies exactly that
-missing knowledge for one family of models at a time, and drives no lifecycle of its
-own: importing, deploying and deleting stay your calls against the cortexgrid SDK.
+missing knowledge, and drives no lifecycle of its own: importing, deploying and
+deleting stay your calls against the cortexgrid SDK.
+
+Upgrading from 0.2.x? See [MIGRATION.md](https://github.com/robodatalab/cortexgrid-infer/blob/main/MIGRATION.md).
 
 ## Division of labour
 
 | | Owns |
 |---|---|
 | **cortexgrid** | Registry identity, weights, serve bundle, hardware placement, deployment, jobs. Never knows what kind of model it holds. |
-| **cortexgrid-infer** | Per family: how to name it, fetch it, run it, size it, talk to it. Never drives a lifecycle. |
+| **cortexgrid-infer** | Per source: how to name a model, fetch it and size it. Per task: how to run it and talk to it. Never drives a lifecycle. |
 | **you** | Policy: which model, which requirements, when to import, deploy and tear down. |
 
-An **importer** is the whole of this library's cluster-side surface. It gives you what
-`cortexgrid.import_model` and `cortexgrid.deploy_model` need:
+A model is two things, and the library keeps them apart:
+
+- **What runs it** — a serve app in `cortexgrid_infer.models`, named for the task it
+  runs, not for where the model came from. It loads the weights, answers the task's
+  routes, and names the client that speaks them. One serve app runs every model of
+  its task, whichever source staged it.
+- **Where its weights come from** — an importer in `cortexgrid_infer.importers`, one
+  per source. It names the model in the registry, downloads the weights, and sizes
+  them from the source's metadata. It is handed the serve app, so one importer takes
+  any model its source holds.
+
+| Serve app | Task | Runs | Client |
+|---|---|---|---|
+| `Text2Text` | text to text | any causal LM in the transformers layout, via `AutoModelForCausalLM` | `ServedCompletingModel` (`complete`) |
+| `Text2Image` | text (and image) to image | any diffusers pipeline | `ServedGeneratingModel` (`generate`) |
+| `Image2Mesh` — a base: subclass it with the model's `load` and `make_mesh` | image to mesh | the model the subclass loads, behind the task's `POST /mesh` | `ServedMeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
+| `AnthropicText2Text` | text to text | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
+
+| Importer | Source |
+|---|---|
+| `HuggingFaceImporter(hf_id, serve_app, token=None, ignore_patterns=None)` | the HuggingFace Hub |
+
+A model hosted elsewhere has no weights, and so no importer: its serve app forwards
+to it, and a `Hosted(model_id, serve_app, **settings)` entry registers it.
+
+An importer and a `Hosted` entry are both a `ModelEntry`, which gives you what
+`cortexgrid.import_model`, `cortexgrid.register_model` and `cortexgrid.deploy_model`
+need:
 
 | | |
 |---|---|
@@ -27,20 +55,10 @@ An **importer** is the whole of this library's cluster-side surface. It gives yo
 | `.requirements()` | what one replica needs to be placed and to run |
 | `.config()` | settings the serve app reads at construction, if it needs any |
 | `.client(url)` | a client that speaks the deployed app's routes |
-| `.source` | *(models with weights)* a callable that downloads them and returns the directory |
+| `.source` | *(importers only)* a callable that downloads the weights and returns the directory |
 
-| Importer | Serves | Client |
-|---|---|---|
-| `HuggingFaceCompletingImport(hf_id, token=None)` | HuggingFace causal LM, via `AutoModelForCausalLM` | `ServedCompletingModel` (`complete`) |
-| `HuggingFaceImageImport(hf_id, token=None, ignore_patterns=None)` | HuggingFace diffusers pipeline | `HuggingFaceImageModel` (`generate`) |
-| `AnthropicImport(model_id, api_key_secret=...)` | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
-| `HuggingFaceMeshImport(hf_id, token=None, ignore_patterns=None)` — a base: subclass it, naming a `MeshingDeployment` subclass as `serve_app` | an image-to-mesh model, run by the serve app the subclass supplies (`load` and `make_mesh`) behind the family's `POST /mesh` | `ServedMeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
-
-Not every model has weights, so `.source` belongs to the HuggingFace importers
-rather than to all of them: one that has weights goes through
-`cortexgrid.import_model`, one that has none through `cortexgrid.register_model`.
-Everything else is common, which is why one client serves all three — every
-completion app speaks the same `/complete` protocol.
+One with weights goes through `cortexgrid.import_model`, one without through
+`cortexgrid.register_model`.
 
 ## Quick start
 
@@ -50,7 +68,7 @@ import cortexgrid
 import cortexgrid_infer as mg
 
 cortexgrid.Experiment.init("img-gen")
-imp = mg.HuggingFaceImageImport("black-forest-labs/FLUX.2-klein-base-4B")
+imp = mg.HuggingFaceImporter("black-forest-labs/FLUX.2-klein-base-4B", mg.Text2Image)
 
 # 1. Import — weights go HuggingFace ─▶ cluster node ─▶ registry, never through
 #    your machine, so this runs as a job rather than in-process.
@@ -105,12 +123,14 @@ serve code if it changed, and tags the run with the model.
 `cortexgrid.ModelRequirements` decides which node Ray will place a replica on, and
 nothing in the registry can derive it — cortexgrid stores whatever weights it is
 handed, and an importer imports whatever repo id it is handed. `requirements()`
-estimates it from the repo's own metadata: safetensors headers where the repo has
-them, weight-file sizes otherwise. Both are read over HTTP; no weights are
-downloaded.
+splits the estimate along the same line as the rest: the importer reads what the
+source records about the weights — for HuggingFace, safetensors headers where the
+repo has them, weight-file sizes otherwise, both over HTTP with no weights
+downloaded — and the serve app turns that into what a replica needs, since it knows
+the dtype it loads in and what its work takes on top.
 
 ```python
->>> mg.HuggingFaceCompletingImport("Qwen/Qwen2.5-0.5B-Instruct").requirements()
+>>> mg.HuggingFaceImporter("Qwen/Qwen2.5-0.5B-Instruct", mg.Text2Text).requirements()
 ModelRequirements(num_gpus=1, ram_gb=3.0, vram_gb=3.2)
 ```
 
@@ -119,14 +139,15 @@ you know better, or edit the figures on the model card in the dashboard afterwar
 `import_model` only fills in requirements a version does not already have, so a
 hand-set value is never overwritten.
 
-The estimate always asks for exactly one GPU, because both HuggingFace serve apps move
-the whole model onto a single device. A model too large for any one card needs a serve
-app that shards it, not a larger `num_gpus`: the requirement would simply never be
-placed. (`AnthropicImport` asks for none — it holds no weights.)
+The estimate always asks for exactly one GPU, because every serve app that runs weights
+moves the whole model onto a single device. A model too large for any one card needs a
+serve app that shards it, not a larger `num_gpus`: the requirement would simply never
+be placed. An `Image2Mesh` subclass can set `min_vram_gb` for the memory meshing takes
+beyond the weights. (A `Hosted` entry asks for none — it holds no weights.)
 
 ## Compilation
 
-Both HuggingFace serve apps run `torch.compile` over the model they load, because
+`Text2Text` and `Text2Image` run `torch.compile` over the model they load, because
 eager PyTorch bills per *operation* and a transformer forward is mostly glue —
 views, broadcasts, permutes, elementwise adds — with only a small fraction of the
 dispatches being the matrix multiplies that do the arithmetic. While the tensors
@@ -147,12 +168,12 @@ fits the work it does:
 
 Both serve apps are tuned rather than defaulted:
 
-- **`HuggingFaceImageDeployment`** compiles the denoiser (`transformer` or `unet`)
+- **`Text2Image`** compiles the denoiser (`transformer` or `unet`)
   and every `text_encoder*` as `Mode.GRAPHED`. A denoising schedule is the ideal case —
   every step is the same shapes — so the capture is made once and replayed for the
   whole loop. The VAE is left alone: smallest win of the three, and the one whose
   shapes move most, especially with tiling on.
-- **`HuggingFaceCompletingDeployment`** does *not* compile the module. Decode has
+- **`Text2Text`** does *not* compile the module. Decode has
   no stable shape of its own — the sequence grows a token per forward — so it
   pins one: `cache_implementation="static"` with a fixed `max_cache_len`, plus a
   `CompileConfig(mode=Mode.GRAPHED)`. transformers then compiles `generate`
@@ -196,7 +217,7 @@ it is the floor; only quantizing the weights or running fewer forwards moves it.
 `complete` streams `CompletionChunk`s (`.content`, `.tool_calls`, `.finish_reason`):
 
 ```python
-imp = mg.HuggingFaceCompletingImport("Qwen/Qwen2.5-7B-Instruct")
+imp = mg.HuggingFaceImporter("Qwen/Qwen2.5-7B-Instruct", mg.Text2Text)
 model = imp.client(deployment.url)
 messages = [{"role": "user", "content": "Explain RAG in one sentence."}]
 
@@ -211,17 +232,17 @@ async for chunk in mg.complete(model, messages, max_new_tokens=512, temperature=
 ### Anthropic
 
 An Anthropic model is a registry entry like any other — the difference is that
-there are no weights to stage, so it is imported with no source, and the serve
-app forwards to the API instead of loading anything:
+there are no weights to stage, so there is no importer: the serve app forwards to
+the API instead of loading anything, and a `Hosted` entry registers it:
 
 ```python
 cortexgrid.set_secret("ANTHROPIC_API_KEY", "sk-ant-...")   # once
 
-imp = mg.AnthropicImport("claude-sonnet-5")
+entry = mg.Hosted("claude-sonnet-5", mg.AnthropicText2Text)   # api_key_secret="..." to use another secret
 cortexgrid.register_model(
-    imp.serve_app,
-    family=imp.family, suffix=imp.suffix,
-    requirements=imp.requirements(), config=imp.config(),
+    entry.serve_app,
+    family=entry.family, suffix=entry.suffix,
+    requirements=entry.requirements(), config=entry.config(),
 )
 ```
 
@@ -238,7 +259,7 @@ a re-deploy rather than a re-registration.
 
 A replica asks for no hardware at all, so it is placed on any node, CPU-only
 included. From there it deploys and streams exactly like a cluster-served model:
-`imp.client(deployment.url)` returns the same `ServedCompletingModel`. Anthropic
+`entry.client(deployment.url)` returns the same `ServedCompletingModel`. Anthropic
 reports tool calls as structured blocks rather than as generated text, so the
 serve app re-encodes them into the text form the client parses.
 
@@ -246,37 +267,50 @@ serve app re-encodes them into the text form the client parses.
 
 | | |
 |---|---|
-| `HuggingFaceCompletingImport(hf_id, token=None)` | Importer for a causal LM. |
-| `HuggingFaceImageImport(hf_id, token=None, ignore_patterns=None)` | Importer for a diffusers pipeline. |
-| `AnthropicImport(model_id, api_key_secret="ANTHROPIC_API_KEY")` | Importer for an Anthropic model; no weights. |
-| `ModelImport` | Base of all three: `family`, `suffix`, `serve_app`, `requirements()`, `config()`, `client(url)`. |
-| `HuggingFaceImport` | Adds the download half — `source` and the scratch directory. Subclass it for another HuggingFace family. |
+| `HuggingFaceImporter(hf_id, serve_app, token=None, ignore_patterns=None)` | Importer for a model on the HuggingFace Hub, run by `serve_app`. |
+| `Importer` | Base of the importers: identity, scratch directory, `source`, and `requirements()` / `client(url)` taken from the serve app. A new source implements `download(local_dir)` and `weights()`. |
+| `Hosted(model_id, serve_app, **settings)` | Entry for a model hosted elsewhere; no weights. `settings` are the serve app's `config` arguments. |
+| `ModelEntry` | Base of both: `model_id`, `family`, `suffix`, `serve_app`, `requirements()`, `config()`, `client(url)`. |
+| `Text2Text`, `Text2Image`, `Image2Mesh` | Serve apps that run weights (`LocalModel`s). |
+| `AnthropicText2Text` | Serve app that forwards to the Anthropic API (a `HostedModel`). |
+| `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `client(url, name)`. |
+| `HostedModel` | Base of the serve apps that forward: `config(model_id, **settings)`, `requirements()`, `client(url, name)`. |
+| `Weights(params=None, file_bytes=0)` | What an importer reads about the weights, handed to the serve app to size a replica. |
 | `complete(model, messages, tools=None, max_new_tokens=2048, temperature=0.7, **kw)` | Async stream of `CompletionChunk` for a `CompletingModel`. |
 | `generate(model, prompt, *, image=None, **kw) -> GeneratedImage` | One image from a `GeneratingModel`. |
 | `ServedCompletingModel(url, model_id)` | Client for any deployed completion app. |
-| `HuggingFaceImageModel(url, model_id)` | Client for a deployed diffusers app. |
+| `ServedGeneratingModel(url, model_id)` | Client for any deployed text-to-image app. |
+| `ServedMeshingModel(url, model_id)` | Client for any deployed image-to-mesh app. |
 | `split_model_id(model_id) -> (family, suffix)` | The registry identity an importer derives. |
 | `detect_device()` | The torch device a serve app should load onto. |
 | `compiling.Mode.GRAPHED` / `compiling.Mode.FUSED` | The two modes a serve app chooses between. See [Compilation](#compilation). |
 | `compiling.supported(device)` / `compile_module(module, device, mode)` / `compile_pipeline(pipe, device, mode)` | Whether to compile here, and what a serve app calls to do it. |
 | `ModelDeployFailed` | Re-exported from cortexgrid; subclasses `RuntimeError`. |
 
-Types: `DeployedModel`, `CompletingModel`, `GeneratingModel`, `CompletionChunk`,
-`GeneratedImage`, `ToolCall`, `Message`, `Tool`, `ToolSpec`.
+Types: `DeployedModel`, `CompletingModel`, `GeneratingModel`, `MeshingModel`,
+`CompletionChunk`, `GeneratedImage`, `GeneratedMesh`, `ToolCall`, `Message`, `Tool`,
+`ToolSpec`.
 
-Adding a provider means one importer and one serve app. A completion app only has
-to stream text from `POST /complete`, inlining tool calls as
-`<tool_call>{"name": ..., "arguments": {...}}</tool_call>` (there is an
-`encode_tool_call` for upstreams that report them structurally) — then
-`ServedCompletingModel` is its client, unchanged.
+Extending it:
+
+- **A new source** is one importer: subclass `Importer` with `download(local_dir)`
+  and `weights()`, and every serve app whose weight format it delivers runs its
+  models unchanged.
+- **A new hosted API** is one serve app: subclass `HostedModel`, and register it
+  with `Hosted`. A text-to-text one only has to stream text from `POST /complete`,
+  inlining tool calls as `<tool_call>{"name": ..., "arguments": {...}}</tool_call>`
+  (there is an `encode_tool_call` for upstreams that report them structurally) —
+  then `ServedCompletingModel` is its client, unchanged.
+- **A model no task's serve app can load** gets its own serve app — an `Image2Mesh`
+  subclass, say — and, if its source is unusual too, its own importer.
 
 ## Notes
 
 - **HuggingFace auth.** For gated/private repos, pass `token=` to the importer (or
   read `HF_TOKEN` yourself and pass it); it travels with the importer to the node
   that downloads.
-- **Image weight pruning.** `HuggingFaceImageImport` skips example images, docs and
-  `.gitattributes` by default — nothing `from_pretrained` reads. It does **not**
+- **Image weight pruning.** `Text2Image` tells the importer to skip example images,
+  docs and `.gitattributes` — nothing `from_pretrained` reads. It does **not**
   skip a repo's consolidated single-file checkpoint, which is weights it cannot
   tell apart from the component ones: name it per-model in
   `HF_IMAGE_SNAPSHOT_IGNORE` (comma-separated globs, e.g.
@@ -286,7 +320,7 @@ to stream text from `POST /complete`, inlining tool calls as
   describe what actually gets staged:
 
   ```python
-  >>> mg.HuggingFaceImageImport("black-forest-labs/FLUX.2-klein-base-4B").requirements()
+  >>> mg.HuggingFaceImporter("black-forest-labs/FLUX.2-klein-base-4B", mg.Text2Image).requirements()
   ModelRequirements(num_gpus=1, ram_gb=26.3, vram_gb=29.6)   # single-file checkpoint included
   ```
 - **Only model files are stored.** HuggingFace's download bookkeeping

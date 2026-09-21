@@ -1,13 +1,14 @@
-"""Ray Serve deployment that forwards completions to the Anthropic API.
+"""The text-to-text serve app that forwards to the Anthropic API.
 
-The odd one out among serve apps: it loads no weights and needs no GPU. What it
-needs instead is which Anthropic model to call and a key to call it with, and
-those come from the registry entry's `config`, set when the model was registered
-and editable on its model card afterwards.
+It loads no weights and needs no GPU, so there is nothing to import: it is
+registered with `registry.Hosted`. What it needs instead is which Anthropic
+model to call and a key to call it with, and those come from the registry
+entry's `config`, set when the model was registered and editable on its model
+card afterwards.
 
-It speaks the same `/complete` protocol as every other completion app, so the
-same client talks to it. Anthropic reports tool calls as structured blocks
-rather than as generated text, so they are re-encoded on the way out.
+It speaks the same `/complete` protocol as `Text2Text`, so the same client talks
+to it. Anthropic reports tool calls as structured blocks rather than as
+generated text, so they are re-encoded on the way out.
 """
 
 from __future__ import annotations
@@ -21,14 +22,20 @@ from cortexgrid import serve
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
-from cortexgrid_infer.completion import encode_tool_call
+from cortexgrid_infer.completion import ServedCompletingModel, encode_tool_call
 from cortexgrid_infer.core import Message, ToolSpec
+from cortexgrid_infer.models.base import HostedModel
 
 _app = FastAPI()
 
 # Keys the registry entry must carry for the deployment to reach the API.
 MODEL_PARAM = "model"
 API_KEY_SECRET_PARAM = "api_key_secret"
+
+# The cortexgrid secret the deployment reads its API key from. It is the secret's
+# name that is stored on the registry entry, never the key itself: entries are
+# readable by anyone who can see the model.
+DEFAULT_API_KEY_SECRET = "ANTHROPIC_API_KEY"
 
 
 def to_anthropic_messages(
@@ -110,7 +117,20 @@ def to_anthropic_tools(
 
 
 @serve.ingress(_app)
-class AnthropicDeployment:
+class AnthropicText2Text(HostedModel):
+    @classmethod
+    def config(
+        cls, model_id: str, api_key_secret: str = DEFAULT_API_KEY_SECRET
+    ) -> dict[str, str]:
+        """`model_id` is the name Anthropic knows the model by, and is what the
+        deployment sends upstream; `api_key_secret` names the cortexgrid secret
+        holding the key to send it with."""
+        return {MODEL_PARAM: model_id, API_KEY_SECRET_PARAM: api_key_secret}
+
+    @classmethod
+    def client(cls, url: str, name: str) -> ServedCompletingModel:
+        return ServedCompletingModel(url=url, model_id=name)
+
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         config = cortexgrid.model_config(family, suffix, run_name)
         missing = {MODEL_PARAM, API_KEY_SECRET_PARAM} - config.keys()

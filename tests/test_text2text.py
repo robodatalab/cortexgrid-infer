@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.providers.huggingface_complete."""
+"""Tests for cortexgrid_infer.models.text2text."""
 
 from __future__ import annotations
 
@@ -7,42 +7,19 @@ import unittest
 from unittest import mock
 
 from cortexgrid_infer.completion import ServedCompletingModel
-from cortexgrid_infer.providers.huggingface_complete import HuggingFaceCompletingImport
-from cortexgrid_infer.providers.huggingface_complete_serve import (
-    HuggingFaceCompletingDeployment,
-)
+from cortexgrid_infer.models.text2text import Text2Text
 
 
-class TestHuggingFaceCompletingImport(unittest.TestCase):
-    def test_names_the_model_for_the_registry(self):
-        imp = HuggingFaceCompletingImport("Qwen/Qwen2-2.5B-Instruct")
-        self.assertEqual((imp.family, imp.suffix), ("Qwen2-2.5B", "Instruct"))
-
-    def test_bundles_the_completing_serve_app(self):
-        self.assertIs(
-            HuggingFaceCompletingImport("Qwen/Qwen2-2.5B-Instruct").serve_app,
-            HuggingFaceCompletingDeployment,
-        )
-
+class TestText2TextForTheImporter(unittest.TestCase):
     def test_client_speaks_the_deployed_app(self):
-        imp = HuggingFaceCompletingImport("Qwen/Qwen2-2.5B-Instruct")
-        model = imp.client("http://h/r/F/S/R")
+        model = Text2Text.client("http://h/r/F/S/R", "Qwen/Qwen2-2.5B-Instruct")
         self.assertIsInstance(model, ServedCompletingModel)
         self.assertEqual(model.url, "http://h/r/F/S/R")
         self.assertEqual(model.name, "Qwen/Qwen2-2.5B-Instruct")
 
-    @mock.patch("cortexgrid_infer.importing.snapshot_download")
-    def test_source_downloads_the_whole_repo(self, mock_snapshot: mock.Mock):
-        # A causal LM sets no ignore patterns: every file the repo ships is one
-        # `from_pretrained` may read.
-        with HuggingFaceCompletingImport("Qwen/Qwen2-2.5B-Instruct", "tok") as imp:
-            imp.source()
-
-        self.assertEqual(
-            mock_snapshot.call_args.kwargs["repo_id"], "Qwen/Qwen2-2.5B-Instruct"
-        )
-        self.assertEqual(mock_snapshot.call_args.kwargs["token"], "tok")
-        self.assertIsNone(mock_snapshot.call_args.kwargs["ignore_patterns"])
+    def test_loads_every_file_the_repo_ships(self):
+        # Every file a causal LM repo ships is one `from_pretrained` may read.
+        self.assertIsNone(Text2Text.ignore_patterns())
 
 
 class _ModelConfig:
@@ -78,8 +55,8 @@ class _Device:
         self.type = type_
 
 
-class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
-    SERVE = "cortexgrid_infer.providers.huggingface_complete_serve"
+class TestText2TextCompiles(unittest.TestCase):
+    SERVE = "cortexgrid_infer.models.text2text"
 
     def build(self, device: str = "cuda", config: dict | None = None,
               context: int = 32768) -> _FakeCausalLM:
@@ -91,7 +68,7 @@ class TestHuggingFaceCompletingDeploymentCompiles(unittest.TestCase):
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device(device)):
-            self.deployment = HuggingFaceCompletingDeployment(
+            self.deployment = Text2Text(
                 "family", "suffix", "imported"
             )
         return model
@@ -144,7 +121,7 @@ class TestPromptTruncation(unittest.TestCase):
     """An over-long prompt would resize the KV cache and recompile the decode
     loop, which costs more than the whole generation. It is cut instead."""
 
-    SERVE = "cortexgrid_infer.providers.huggingface_complete_serve"
+    SERVE = "cortexgrid_infer.models.text2text"
 
     def setUp(self) -> None:
         model = _FakeCausalLM(context=8)
@@ -154,7 +131,7 @@ class TestPromptTruncation(unittest.TestCase):
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cuda")):
-            self.deployment = HuggingFaceCompletingDeployment(
+            self.deployment = Text2Text(
                 "family", "suffix", "imported"
             )
 
