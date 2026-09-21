@@ -34,6 +34,7 @@ An **importer** is the whole of this library's cluster-side surface. It gives yo
 | `HuggingFaceCompletingImport(hf_id, token=None)` | HuggingFace causal LM, via `AutoModelForCausalLM` | `ServedCompletingModel` (`complete`) |
 | `HuggingFaceImageImport(hf_id, token=None, ignore_patterns=None)` | HuggingFace diffusers pipeline | `HuggingFaceImageModel` (`generate`) |
 | `AnthropicImport(model_id, api_key_secret=...)` | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
+| `HuggingFaceMeshImport(hf_id, token=None, ignore_patterns=None)` — a base: subclass it, naming a `MeshingDeployment` subclass as `serve_app` | an image-to-mesh model, run by the serve app the subclass supplies (`load` and `make_mesh`) behind the family's `POST /mesh` | `ServedMeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
 
 Not every model has weights, so `.source` belongs to the HuggingFace importers
 rather than to all of them: one that has weights goes through
