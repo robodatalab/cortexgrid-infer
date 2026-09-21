@@ -1,6 +1,6 @@
 [project]
 name = "cortexgrid-infer"
-version = "0.2.6"
+version = "0.2.7"
 description = "Deploy and interact with models across providers (Anthropic, HuggingFace LLM + diffusion + image-to-mesh)"
 readme = "README.md"
 license = "Apache-2.0"
