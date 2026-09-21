@@ -1,9 +1,9 @@
-"""Ray Serve deployment that loads a HuggingFace diffusion pipeline from the
-cortexgrid registry and exposes a single POST /generate endpoint.
+"""The text-to-image serve app: a diffusers pipeline loaded from the cortexgrid
+registry, answering `POST /generate` (see `cortexgrid_infer.imaging`).
 
 The pipeline class is not hardcoded: it is read from the model's
 ``model_index.json`` (``_class_name``) and resolved against ``diffusers``, so
-one deployment serves any diffusers text-to-image pipeline (FLUX.2, SD, ...).
+one app serves any diffusers text-to-image pipeline (FLUX.2, SD, ...).
 Pipelines that also accept a reference ``image`` (e.g. FLUX.2) get img2img for
 free — the reference is forwarded when the request carries one.
 """
@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,8 @@ import torch
 
 from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
+from cortexgrid_infer.imaging import ServedGeneratingModel
+from cortexgrid_infer.models.base import LocalModel
 
 
 _app = FastAPI()
@@ -35,6 +38,16 @@ _app = FastAPI()
 # caller omits them. Reasonable for other diffusers pipelines too.
 _DEFAULT_STEPS = 50
 _DEFAULT_GUIDANCE = 4.0
+
+# `from_pretrained` reads the component subfolders + configs; it never touches the
+# example images, docs, or a repo's consolidated single-file checkpoint. Skipping
+# those keeps the snapshot (and the S3 upload that follows) to just the weights the
+# pipeline loads — e.g. FLUX.2 ships a ~7.75 GB single-file checkpoint on top of the
+# ~16 GB of component weights. Extend per-model via HF_IMAGE_SNAPSHOT_IGNORE
+# (comma-separated globs), e.g. "flux-2-klein-base-4b.safetensors".
+_DEFAULT_IGNORE = [
+    "*.jpg", "*.jpeg", "*.png", "*.gif", "*.bmp", "*.webp", "*.md", ".gitattributes",
+]
 
 
 def _round_to_multiple(x: int, base: int = 16) -> int:
@@ -60,7 +73,17 @@ def _pipeline_class(model_dir: Path) -> Any:
 
 
 @serve.ingress(_app)
-class HuggingFaceImageDeployment:
+class Text2Image(LocalModel):
+    @classmethod
+    def ignore_patterns(cls) -> list[str]:
+        """The files no pipeline loads, plus the globs in HF_IMAGE_SNAPSHOT_IGNORE."""
+        extra = os.environ.get("HF_IMAGE_SNAPSHOT_IGNORE", "")
+        return _DEFAULT_IGNORE + [p.strip() for p in extra.split(",") if p.strip()]
+
+    @classmethod
+    def client(cls, url: str, name: str) -> ServedGeneratingModel:
+        return ServedGeneratingModel(url=url, model_id=name)
+
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         path = cortexgrid.load_model(family, suffix, run_name)
         self._device = detect_device()

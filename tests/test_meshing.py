@@ -1,5 +1,5 @@
-"""Tests for the image-to-mesh family: the /mesh protocol's client and serve app,
-and the HuggingFace importer base."""
+"""Tests for the image-to-mesh task: the /mesh protocol's client and the serve
+app every model of the task subclasses."""
 
 from __future__ import annotations
 
@@ -11,15 +11,14 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-import cortexgrid
 from cortexgrid import serve
 import numpy as np
 from PIL import Image
 
 from cortexgrid_infer.core import GeneratedMesh
 from cortexgrid_infer.meshing import ServedMeshingModel
-from cortexgrid_infer.meshing_serve import MeshingDeployment
-from cortexgrid_infer.providers.huggingface_mesh import HuggingFaceMeshImport
+from cortexgrid_infer.models.base import Weights
+from cortexgrid_infer.models.image2mesh import Image2Mesh
 
 TRIANGLE = GeneratedMesh(
     vertices=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32),
@@ -63,8 +62,10 @@ class _FakeAsyncClient:
         return _FakeResponse(self._payload)
 
 
-class _TriangleDeployment(MeshingDeployment):
+class _TriangleDeployment(Image2Mesh):
     """A model that answers every picture with one triangle."""
+
+    min_vram_gb = 6.0
 
     def load(self, path: Path, device: Any) -> None:
         self.loaded = (path, device)
@@ -74,13 +75,8 @@ class _TriangleDeployment(MeshingDeployment):
         return TRIANGLE
 
 
-class _TriangleImport(HuggingFaceMeshImport):
-    serve_app = _TriangleDeployment
-    vram_gb = 6.0
-
-
-class TestMeshingDeployment(unittest.TestCase):
-    SERVE = "cortexgrid_infer.meshing_serve"
+class TestImage2Mesh(unittest.TestCase):
+    SERVE = "cortexgrid_infer.models.image2mesh"
 
     def setUp(self):
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/weights"), \
@@ -109,12 +105,12 @@ class TestMeshingDeployment(unittest.TestCase):
         self.assertIn("duration_s", reply)
 
     def test_a_model_s_serve_app_is_fronted_by_the_family_s_route(self):
-        self.assertIs(serve.ingress_app(_TriangleDeployment), serve.ingress_app(MeshingDeployment))
+        self.assertIs(serve.ingress_app(_TriangleDeployment), serve.ingress_app(Image2Mesh))
 
 
 class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
     async def test_round_trips_a_mesh_through_the_protocol(self):
-        with mock.patch("cortexgrid_infer.meshing_serve.cortexgrid.load_model", return_value="/w"):
+        with mock.patch("cortexgrid_infer.models.image2mesh.cortexgrid.load_model", return_value="/w"):
             deployment = _TriangleDeployment("family", "suffix", "imported")
         model = ServedMeshingModel(url="http://h/r/Tri/base/R", model_id="org/Tri")
         payload: dict[str, Any] = {}
@@ -136,23 +132,16 @@ class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deployment.asked[1], {"resolution": 32})
 
 
-class TestHuggingFaceMeshImport(unittest.TestCase):
-    def test_names_the_model_for_the_registry(self):
-        imp = _TriangleImport("org/Tri-small")
-        self.assertEqual((imp.family, imp.suffix), ("Tri", "small"))
-
-    def test_client_speaks_the_family_s_protocol(self):
-        model = _TriangleImport("org/Tri-small").client("http://h/r/Tri/small/R")
+class TestImage2MeshForTheImporter(unittest.TestCase):
+    def test_client_speaks_the_task_s_protocol(self):
+        model = _TriangleDeployment.client("http://h/r/Tri/small/R", "org/Tri-small")
         self.assertIsInstance(model, ServedMeshingModel)
         self.assertEqual((model.url, model.name), ("http://h/r/Tri/small/R", "org/Tri-small"))
 
-    @mock.patch("cortexgrid_infer.importing.requirements.estimate")
-    def test_asks_for_the_memory_meshing_takes_not_just_the_weights(self, estimate: mock.Mock):
-        estimate.return_value = cortexgrid.ModelRequirements(num_gpus=1, ram_gb=3.7, vram_gb=4.0)
+    def test_asks_for_the_memory_meshing_takes_not_just_the_weights(self):
+        needs = _TriangleDeployment.requirements(Weights(params=1_000_000))
 
-        needs = _TriangleImport("org/Tri-small").requirements()
-
-        self.assertEqual((needs.num_gpus, needs.ram_gb, needs.vram_gb), (1, 3.7, 6.0))
+        self.assertEqual((needs.num_gpus, needs.vram_gb), (1, 6.0))
 
 
 if __name__ == "__main__":

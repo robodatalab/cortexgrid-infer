@@ -2,11 +2,15 @@
 
 cortexgrid owns a model's life - registry identity, weights, serve bundle,
 hardware placement, deployment, jobs - and knows nothing about what kind of
-model it holds. This library supplies the per-family knowledge those calls need
-and nothing else: an importer that names, fetches, sizes and serves one family
-of models, and a client that speaks the deployed app's routes.
+model it holds. This library supplies the knowledge those calls need and
+nothing else, split along the two things a model is:
 
-    imp = cortexgrid_infer.HuggingFaceCompletingImport("Qwen/Qwen2.5-0.5B-Instruct")
+- where its weights come from - an importer per source (`importers`), which
+  names, fetches and sizes them;
+- what runs it - a serve app per task (`models`), which loads the weights,
+  answers the task's routes, and names the client that speaks them.
+
+    imp = cortexgrid_infer.HuggingFaceImporter("Qwen/Qwen2.5-0.5B-Instruct", cortexgrid_infer.Text2Text)
     with imp:
         cortexgrid.import_model(
             imp.source, imp.serve_app,
@@ -15,6 +19,9 @@ of models, and a client that speaks the deployed app's routes.
         )
     deployment = cortexgrid.deploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED, wait=True)
     model = imp.client(deployment.url)
+
+A model hosted elsewhere has no weights and so no importer: its serve app
+forwards to it, and a `Hosted` entry registers it.
 
 See `examples/deploy_text_model` for the whole lifecycle, import job included.
 """
@@ -38,17 +45,20 @@ from cortexgrid_infer.core import (
     mesh,
 )
 from cortexgrid_infer.completion import ServedCompletingModel
-from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.importing import HuggingFaceImport, ModelImport, split_model_id
-from cortexgrid_infer.providers.anthropic import AnthropicImport
-from cortexgrid_infer.providers.huggingface_complete import HuggingFaceCompletingImport
-from cortexgrid_infer.providers.huggingface_image import (
-    HuggingFaceImageImport,
-    HuggingFaceImageModel,
-)
+from cortexgrid_infer.imaging import ServedGeneratingModel
 from cortexgrid_infer.meshing import ServedMeshingModel
-from cortexgrid_infer.meshing_serve import MeshingDeployment
-from cortexgrid_infer.providers.huggingface_mesh import HuggingFaceMeshImport
+from cortexgrid_infer.device import detect_device
+from cortexgrid_infer.models import (
+    AnthropicText2Text,
+    HostedModel,
+    Image2Mesh,
+    LocalModel,
+    Text2Image,
+    Text2Text,
+    Weights,
+)
+from cortexgrid_infer.registry import Hosted, ModelEntry, split_model_id
+from cortexgrid_infer.importers import HuggingFaceImporter, Importer
 
 __all__ = [
     "CompletionChunk",
@@ -67,15 +77,19 @@ __all__ = [
     "mesh",
     "ModelDeployFailed",
     "detect_device",
-    "split_model_id",
-    "ModelImport",
-    "HuggingFaceImport",
-    "HuggingFaceCompletingImport",
-    "HuggingFaceImageImport",
-    "HuggingFaceMeshImport",
-    "AnthropicImport",
     "ServedCompletingModel",
-    "HuggingFaceImageModel",
+    "ServedGeneratingModel",
     "ServedMeshingModel",
-    "MeshingDeployment",
+    "LocalModel",
+    "HostedModel",
+    "Weights",
+    "Text2Text",
+    "Text2Image",
+    "Image2Mesh",
+    "AnthropicText2Text",
+    "ModelEntry",
+    "Hosted",
+    "split_model_id",
+    "Importer",
+    "HuggingFaceImporter",
 ]

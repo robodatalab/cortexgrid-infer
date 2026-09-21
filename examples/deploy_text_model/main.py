@@ -5,10 +5,10 @@ the Ray Serve app, chat in the terminal, then delete the model from the cluster.
 
 The lifecycle is driven with the cortexgrid SDK directly - `remote`,
 `import_model`, `deploy_model`, `delete_model`. cortexgrid-infer only supplies
-the HuggingFace-shaped pieces those calls need: the serve app that will run the
-weights, the download that fetches them, the registry identity to file them
-under, an estimate of the hardware one replica needs, and the HTTP client for
-the deployed app.
+the pieces those calls need: the text-to-text serve app that will run the
+weights, and a HuggingFace importer that fetches them, names them in the
+registry, estimates the hardware one replica needs, and hands back the serve
+app's HTTP client for the deployed app.
 
 Requires CORTEXGRID_HEAD_URL (e.g. in the repo-root .env), and HF_TOKEN for gated
 models.
@@ -26,7 +26,7 @@ HF_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 
 
 def import_weights(
-    importer: mg.HuggingFaceCompletingImport, requirements: cortexgrid.ModelRequirements
+    importer: mg.HuggingFaceImporter, requirements: cortexgrid.ModelRequirements
 ) -> None:
     """Import the model into the registry under the hardware it needs to be served.
 
@@ -81,7 +81,7 @@ def main() -> None:
     print(f"run: {exp.run_name()}")
 
     token = os.environ.get("HF_TOKEN")
-    imp = mg.HuggingFaceCompletingImport(HF_ID, token=token)
+    imp = mg.HuggingFaceImporter(HF_ID, mg.Text2Text, token=token)
 
     # Reads the repo's safetensors headers over HTTP - no weights downloaded - so
     # the registry entry carries the hardware a replica needs and Ray places it

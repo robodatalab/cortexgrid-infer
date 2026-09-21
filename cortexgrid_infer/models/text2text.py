@@ -1,4 +1,11 @@
-"""Ray Serve deployment that loads a HuggingFace model from the cortexgrid registry."""
+"""The text-to-text serve app: a causal LM loaded from the cortexgrid registry,
+streaming from `POST /complete`.
+
+Loads with `AutoModelForCausalLM`, so it runs any causal LM whose weights are
+in the transformers layout, whichever importer staged them. An instruct-tuned
+model emits tool calls as text in the form `ServedCompletingModel` parses, so
+its tokens are forwarded untouched.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +28,9 @@ from transformers import (
 import torch
 
 from cortexgrid_infer import compiling
+from cortexgrid_infer.completion import ServedCompletingModel
 from cortexgrid_infer.device import detect_device
+from cortexgrid_infer.models.base import LocalModel
 
 
 log = logging.getLogger(__name__)
@@ -50,7 +59,11 @@ _RESERVED_BODY_KEYS = {
 
 
 @serve.ingress(_app)
-class HuggingFaceCompletingDeployment:
+class Text2Text(LocalModel):
+    @classmethod
+    def client(cls, url: str, name: str) -> ServedCompletingModel:
+        return ServedCompletingModel(url=url, model_id=name)
+
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         path = cortexgrid.load_model(family, suffix, run_name)
         self._device = detect_device()
