@@ -26,13 +26,16 @@ from cortexgrid_infer.core import (
     DeployedModel,
     CompletingModel,
     GeneratedImage,
+    GeneratedMesh,
     GeneratingModel,
+    MeshingModel,
     Message,
     Tool,
     ToolCall,
     ToolSpec,
     complete,
     generate,
+    mesh,
 )
 from cortexgrid_infer.completion import ServedCompletingModel
 from cortexgrid_infer.device import detect_device
@@ -43,19 +46,25 @@ from cortexgrid_infer.providers.huggingface_image import (
     HuggingFaceImageImport,
     HuggingFaceImageModel,
 )
+from cortexgrid_infer.meshing import ServedMeshingModel
+from cortexgrid_infer.meshing_serve import MeshingDeployment
+from cortexgrid_infer.providers.huggingface_mesh import HuggingFaceMeshImport
 
 __all__ = [
     "CompletionChunk",
     "DeployedModel",
     "CompletingModel",
     "GeneratedImage",
+    "GeneratedMesh",
     "GeneratingModel",
+    "MeshingModel",
     "Message",
     "Tool",
     "ToolCall",
     "ToolSpec",
     "complete",
     "generate",
+    "mesh",
     "ModelDeployFailed",
     "detect_device",
     "split_model_id",
@@ -63,7 +72,10 @@ __all__ = [
     "HuggingFaceImport",
     "HuggingFaceCompletingImport",
     "HuggingFaceImageImport",
+    "HuggingFaceMeshImport",
     "AnthropicImport",
     "ServedCompletingModel",
     "HuggingFaceImageModel",
+    "ServedMeshingModel",
+    "MeshingDeployment",
 ]

@@ -8,6 +8,8 @@ from functools import partial
 from collections.abc import AsyncIterator
 from typing import Any, Callable, Sequence
 
+import numpy as np
+
 
 @dataclass
 class ToolCall:
@@ -87,6 +89,26 @@ class GeneratingModel(DeployedModel):
     ) -> GeneratedImage: ...
 
 
+@dataclass
+class GeneratedMesh:
+    """One mesh: `vertices` (N, 3) float32, x to the right of the picture it was
+    made from, y up, z toward whoever looked at it; `faces` (M, 3) int32 indices
+    into them, counter-clockwise seen from outside; `colours` (N, 3) uint8, each
+    vertex's colour. Plus the resolved parameters the deployment used."""
+
+    vertices: np.ndarray
+    faces: np.ndarray
+    colours: np.ndarray
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+class MeshingModel(DeployedModel):
+    """A deployed model that makes a mesh of the object in one picture."""
+
+    @abc.abstractmethod
+    async def mesh(self, image: bytes, **kwargs: Any) -> GeneratedMesh: ...
+
+
 async def complete(
     deployed_model: CompletingModel,
     messages: list[Message],
@@ -115,3 +137,8 @@ async def generate(
 ) -> GeneratedImage:
     """Single image-generation request to the deployed model."""
     return await deployed_model.generate(prompt, image=image, **kwargs)
+
+
+async def mesh(deployed_model: MeshingModel, image: bytes, **kwargs: Any) -> GeneratedMesh:
+    """Single image-to-mesh request to the deployed model."""
+    return await deployed_model.mesh(image, **kwargs)
