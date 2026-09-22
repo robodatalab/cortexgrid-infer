@@ -13,6 +13,7 @@ cortexgrid bundles the subclass's own file, so the model's code travels with it.
         min_vram_gb = 6.0
         def load(self, path, device): ...
         def make_mesh(self, image, **options) -> GeneratedMesh: ...
+        def compile(self, device): ...  # optional; see `Image2Mesh.compile`
 
     imp = HuggingFaceImporter("org/my-mesh-model", MyMesh)
 """
@@ -31,11 +32,12 @@ from fastapi import FastAPI
 from PIL import Image, ImageOps
 import torch
 
+from cortexgrid_infer import compiling
 from cortexgrid_infer.core import GeneratedMesh
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.protocols import meshing
 from cortexgrid_infer.protocols.meshing import ServedMeshingModel
-from cortexgrid_infer.serve_apps.base import LocalModel
+from cortexgrid_infer.serve_apps.base import COMPILE_PARAM, LocalModel
 
 
 _app = FastAPI()
@@ -55,10 +57,25 @@ class Image2Mesh(LocalModel):
     def __init__(self, family: str, suffix: str, run_name: str) -> None:
         self.device = detect_device()
         self.load(Path(cortexgrid.load_model(family, suffix, run_name)), self.device)
+        settings = cortexgrid.model_config(family, suffix, run_name)
+        requested = settings.get(COMPILE_PARAM, "false") == "true"
+        self.compiled = requested and compiling.supported(self.device)
+        if self.compiled:
+            self.compile(self.device)
 
     def load(self, path: Path, device: torch.device) -> None:
         """Build the model from its files at `path`, on `device`."""
         raise NotImplementedError
+
+    def compile(self, device: torch.device) -> None:
+        """Compile what `load` built, on `device`.
+
+        Called after `load`, and only when the model card asks for it on a
+        device worth compiling on. Does nothing unless overridden: which of a
+        model's modules pay back compiling, and in which `compiling.Mode`, is
+        the model's to know - a denoising loop of fixed shapes suits
+        `Mode.GRAPHED`, a decoder queried over a grid whose size moves suits
+        `Mode.FUSED`. `compiling.compile_module` does the rest."""
 
     def make_mesh(self, image: Image.Image, **options: Any) -> GeneratedMesh:
         """The mesh of the object in `image`, in the frame `GeneratedMesh`

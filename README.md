@@ -150,7 +150,23 @@ beyond the weights. (A `Hosted` entry asks for none — it holds no weights.)
 
 ## Compilation
 
-`Text2Text` and `Text2Image` run `torch.compile` over the model they load, because
+Every serve app that runs weights can run them through `torch.compile`, and none
+does unless asked: a replica is eager unless its model card carries
+`compile: "true"`. Each `LocalModel` writes `compile: "false"` onto the card at
+import, so turning it on is an edit of the card and a redeploy:
+
+```python
+config = cortexgrid.model_config(family, suffix, cortexgrid.IMPORTED)
+cortexgrid.set_model_config(family, suffix, cortexgrid.IMPORTED, {**config, "compile": "true"})
+cortexgrid.deploy_model(family, suffix, cortexgrid.IMPORTED, wait=True)
+```
+
+It is off by default because it is not free: every input shape pays a warm-up on
+the request that first brings it, and each CUDA graph holds memory of its own. It
+pays back where traffic keeps to a few shapes and the model is small enough for
+launch overhead to matter. A card asking for it off CUDA is served eager.
+
+Compiled, a serve app runs `torch.compile` over the model it loads, because
 eager PyTorch bills per *operation* and a transformer forward is mostly glue —
 views, broadcasts, permutes, elementwise adds — with only a small fraction of the
 dispatches being the matrix multiplies that do the arithmetic. While the tensors
@@ -169,7 +185,7 @@ fits the work it does:
 | `Mode.GRAPHED` (`reduce-overhead`) | fuses **and** captures a CUDA graph, so a forward replays one graph instead of issuing its launches | a loop of identically shaped forwards, where the capture is reused every iteration. A graph cannot go dynamic, so each distinct shape captures separately |
 | `Mode.FUSED` (`default`) | fuses only | work whose shapes move under it, where there is nothing stable to capture and dynamo is free to compile one dynamic kernel set for all of them |
 
-Both serve apps are tuned rather than defaulted:
+Each serve app is tuned rather than defaulted:
 
 - **`Text2Image`** compiles the denoiser (`transformer` or `unet`)
   and every `text_encoder*` as `Mode.GRAPHED`. A denoising schedule is the ideal case —
@@ -196,12 +212,25 @@ Both serve apps are tuned rather than defaulted:
   chat template puts the turn to answer last — with a warning naming both
   lengths. Serving it whole would resize the cache and recompile the decode loop,
   which costs more than the generation itself.
+- **`TextRewriter`** decodes as `Text2Text` does — a static cache, `Mode.GRAPHED`,
+  transformers compiling the step — with the cache sized to the 512 new tokens a
+  reply may take, and a larger `max_new_tokens` capped to it. An encoder-decoder
+  has a second cache, though: `generate` sizes cross-attention to the encoded
+  text, so each distinct text length would capture the decode loop afresh. The
+  text is therefore padded up to the next of 32, 64, 128, 256 or 512 tokens —
+  one capture per bucket, the padding masked out — and a longer one is cut to
+  512, keeping its start, with a warning naming both lengths.
+- **`Image2Mesh`** cannot know what to compile: each subclass brings its own
+  model. It calls the subclass's `compile(device)` after `load`, which does
+  nothing unless overridden; a subclass compiles its own modules there with
+  `compiling.compile_module`, in the mode that fits them.
 
-The image app asks to be configured for nothing, for the same reason neither asks
-which dtype to load in; the completion app takes `max_total_tokens` alone, because
-how much cache a caller needs is the one thing the model cannot tell it. Both
-happen on CUDA and nowhere else — inductor is weakest off it, and a host
-outrunning its accelerator is a GPU problem to begin with.
+Beyond the switch, the image app asks to be configured for nothing, for the same
+reason none asks which dtype to load in; the completion app takes
+`max_total_tokens` alone, because how much cache a caller needs is the one thing
+the model cannot tell it. All of it happens on CUDA and nowhere else — inductor
+is weakest off it, and a host outrunning its accelerator is a GPU problem to
+begin with.
 
 Two things worth knowing:
 
@@ -310,10 +339,10 @@ diffusion settings with no Gemini counterpart, and come back as `None`.
 | `Importer` | Base of the importers: identity, scratch directory, `source`, and `requirements()` / `client(url)` taken from the serve app. A new source implements `download(local_dir)` and `weights()`. |
 | `Hosted(model_id, serve_app, **settings)` | Entry for a model hosted elsewhere; no weights. `settings` are the serve app's `config` arguments. |
 | `ModelEntry` | Base of both: `model_id`, `family`, `suffix`, `serve_app`, `requirements()`, `config()`, `client(url)`. |
-| `Text2Text`, `Text2Image`, `Image2Mesh` | Serve apps that run weights (`LocalModel`s). |
+| `Text2Text`, `Text2Image`, `TextRewriter`, `Image2Mesh` | Serve apps that run weights (`LocalModel`s). |
 | `AnthropicText2Text` | Serve app that forwards to the Anthropic API (a `HostedModel`). |
 | `GeminiText2Text`, `GeminiText2Image` | Serve apps that forward to the Gemini API (`HostedModel`s sharing the `GeminiModel` base). |
-| `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `client(url, name)`. |
+| `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `config()` (the model card's defaults, `compile: "false"` among them), `client(url, name)`. |
 | `HostedModel` | Base of the serve apps that forward: `config(model_id, **settings)`, `requirements()`, `client(url, name)`. |
 | `Weights(params=None, file_bytes=0)` | What an importer reads about the weights, handed to the serve app to size a replica. |
 | `complete(model, messages, tools=None, max_new_tokens=2048, temperature=0.7, **kw)` | Async stream of `CompletionChunk` for a `CompletingModel`. |
@@ -342,7 +371,8 @@ Extending it:
   (there is an `encode_tool_call` for upstreams that report them structurally) —
   then `ServedCompletingModel` is its client, unchanged.
 - **A model no task's serve app can load** gets its own serve app — an `Image2Mesh`
-  subclass, say — and, if its source is unusual too, its own importer.
+  subclass, say, with `load` and `make_mesh`, and `compile` if compiling it pays —
+  and, if its source is unusual too, its own importer.
 
 ## Notes
 
