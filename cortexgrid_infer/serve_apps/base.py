@@ -28,6 +28,8 @@ from cortexgrid_infer.core import DeployedModel
 
 _GIB = float(1 << 30)
 
+ENABLE_THINKING_PARAM = "enable_thinking"
+
 # Weights are only part of what a replica holds. The multiplier covers CUDA
 # context, activations and fragmentation; the floor covers the KV cache of a
 # long context, which does not scale with model size the way activations do.
@@ -93,6 +95,10 @@ class LocalModel:
             ram_gb=round(size * _HOST_HEADROOM + _HOST_FLOOR_GB, 1),
             vram_gb=max(round(size * _VRAM_HEADROOM + _VRAM_FLOOR_GB, 1), cls.min_vram_gb),
         )
+
+    @classmethod
+    def config(cls) -> dict[str, str]:
+        return {}
 
     @classmethod
     def client(cls, url: str, name: str) -> DeployedModel:

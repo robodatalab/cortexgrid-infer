@@ -95,5 +95,8 @@ class Importer(ModelEntry):
         have, so a hand-set value is never overwritten."""
         return self.serve_app.requirements(self.weights())
 
+    def config(self) -> dict[str, str]:
+        return self.serve_app.config()
+
     def client(self, url: str) -> DeployedModel:
         return self.serve_app.client(url, self.model_id)

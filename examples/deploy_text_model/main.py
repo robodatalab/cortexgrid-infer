@@ -46,6 +46,7 @@ def import_weights(
             family=importer.family,
             suffix=importer.suffix,
             requirements=requirements,
+            config=importer.config(),
         )
 
 

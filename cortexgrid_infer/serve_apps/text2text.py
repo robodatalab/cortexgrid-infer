@@ -30,7 +30,7 @@ import torch
 from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.protocols.completion import ServedCompletingModel
-from cortexgrid_infer.serve_apps.base import LocalModel
+from cortexgrid_infer.serve_apps.base import ENABLE_THINKING_PARAM, LocalModel
 
 
 log = logging.getLogger(__name__)
@@ -61,6 +61,10 @@ _RESERVED_BODY_KEYS = {
 @serve.ingress(_app)
 class Text2Text(LocalModel):
     @classmethod
+    def config(cls) -> dict[str, str]:
+        return {ENABLE_THINKING_PARAM: "true"}
+
+    @classmethod
     def client(cls, url: str, name: str) -> ServedCompletingModel:
         return ServedCompletingModel(url=url, model_id=name)
 
@@ -81,6 +85,7 @@ class Text2Text(LocalModel):
         self._max_total_tokens = min(
             int(settings.get(MAX_TOTAL_TOKENS_PARAM, DEFAULT_MAX_TOTAL_TOKENS)), context
         )
+        self._enable_thinking = settings.get(ENABLE_THINKING_PARAM, "true") == "true"
         # A static cache of fixed length is what makes decode compilable: it
         # pins the shape every forward sees, so the loop is captured once
         # instead of recompiled per token. transformers then compiles `generate`
@@ -133,6 +138,7 @@ class Text2Text(LocalModel):
             tools=tools,
             tokenize=False,
             add_generation_prompt=True,
+            enable_thinking=self._enable_thinking,
         )
         inputs = self._truncate(
             self._tokenizer(prompt, return_tensors="pt"),

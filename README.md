@@ -217,7 +217,7 @@ it is the floor; only quantizing the weights or running fewer forwards moves it.
 
 ## Inference
 
-`complete` streams `CompletionChunk`s (`.content`, `.tool_calls`, `.finish_reason`):
+`complete` streams `CompletionChunk`s (`.content`, `.thinking`, `.tool_calls`, `.finish_reason`):
 
 ```python
 imp = mg.HuggingFaceImporter("Qwen/Qwen2.5-7B-Instruct", mg.Text2Text)
