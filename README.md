@@ -21,10 +21,10 @@ Upgrading from 0.2.x? See [MIGRATION.md](https://github.com/robodatalab/cortexgr
 
 A model is two things, and the library keeps them apart:
 
-- **What runs it** — a serve app in `cortexgrid_infer.models`, named for the task it
-  runs, not for where the model came from. It loads the weights, answers the task's
-  routes, and names the client that speaks them. One serve app runs every model of
-  its task, whichever source staged it.
+- **What runs it** — a serve app in `cortexgrid_infer.serve_apps`, named for the task
+  it runs, not for where the model came from. It loads the weights, answers the task's
+  routes (defined in `cortexgrid_infer.protocols`), and names the client that speaks
+  them. One serve app runs every model of its task, whichever source staged it.
 - **Where its weights come from** — an importer in `cortexgrid_infer.importers`, one
   per source. It names the model in the registry, downloads the weights, and sizes
   them from the source's metadata. It is handed the serve app, so one importer takes
@@ -35,6 +35,7 @@ A model is two things, and the library keeps them apart:
 | `Text2Text` | text to text | any causal LM in the transformers layout, via `AutoModelForCausalLM` | `ServedCompletingModel` (`complete`) |
 | `Text2Image` | text (and image) to image | any diffusers pipeline | `ServedGeneratingModel` (`generate`) |
 | `Image2Mesh` — a base: subclass it with the model's `load` and `make_mesh` | image to mesh | the model the subclass loads, behind the task's `POST /mesh` | `ServedMeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
+| `TextRewriter` | text to text, rewritten | any encoder-decoder LM (T5, BART, Marian, ...) in the transformers layout, via `AutoModelForSeq2SeqLM` | `ServedRewritingModel` (`rewrite`: one text in, one text out) |
 | `AnthropicText2Text` | text to text | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
 | `GeminiText2Text` | text to text | the Gemini API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
 | `GeminiText2Image` | text to image | the Gemini API, forwarded from the cluster | `ServedGeneratingModel` (`generate`) |

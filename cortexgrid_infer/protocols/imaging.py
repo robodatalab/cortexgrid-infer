@@ -7,7 +7,7 @@ as null, take the app's defaults. The reply carries the picture as a base64 PNG
 under `image`, its `width` and `height`, the options the app resolved, and
 `duration_s`.
 
-`cortexgrid_infer.models.text2image.Text2Image` speaks it for any diffusers
+`cortexgrid_infer.serve_apps.text2image.Text2Image` speaks it for any diffusers
 pipeline, so one client, `ServedGeneratingModel`, serves every model of the
 task whoever made it.
 """

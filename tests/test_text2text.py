@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.models.text2text."""
+"""Tests for cortexgrid_infer.serve_apps.text2text."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ import torch
 import unittest
 from unittest import mock
 
-from cortexgrid_infer.completion import ServedCompletingModel
-from cortexgrid_infer.models.text2text import Text2Text
+from cortexgrid_infer.protocols.completion import ServedCompletingModel
+from cortexgrid_infer.serve_apps.text2text import Text2Text
 
 
 class TestText2TextForTheImporter(unittest.TestCase):
@@ -56,7 +56,7 @@ class _Device:
 
 
 class TestText2TextCompiles(unittest.TestCase):
-    SERVE = "cortexgrid_infer.models.text2text"
+    SERVE = "cortexgrid_infer.serve_apps.text2text"
 
     def build(self, device: str = "cuda", config: dict | None = None,
               context: int = 32768) -> _FakeCausalLM:
@@ -121,7 +121,7 @@ class TestPromptTruncation(unittest.TestCase):
     """An over-long prompt would resize the KV cache and recompile the decode
     loop, which costs more than the whole generation. It is cut instead."""
 
-    SERVE = "cortexgrid_infer.models.text2text"
+    SERVE = "cortexgrid_infer.serve_apps.text2text"
 
     def setUp(self) -> None:
         model = _FakeCausalLM(context=8)

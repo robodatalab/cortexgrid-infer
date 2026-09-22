@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.models.gemini.text2text, registered as a Hosted entry."""
+"""Tests for cortexgrid_infer.serve_apps.gemini.text2text, registered as a Hosted entry."""
 
 from __future__ import annotations
 
@@ -9,16 +9,16 @@ from unittest import mock
 import cortexgrid
 from google.genai import types
 
-from cortexgrid_infer.completion import ServedCompletingModel, encode_tool_call
-from cortexgrid_infer.models.gemini.text2text import (
+from cortexgrid_infer.protocols.completion import ServedCompletingModel, encode_tool_call
+from cortexgrid_infer.registry import Hosted
+from cortexgrid_infer.serve_apps.gemini.text2text import (
     SKIP_THOUGHT_SIGNATURE,
     GeminiText2Text,
     to_gemini_contents,
     to_gemini_tools,
 )
-from cortexgrid_infer.registry import Hosted
 
-BASE = "cortexgrid_infer.models.gemini.base"
+BASE = "cortexgrid_infer.serve_apps.gemini.base"
 
 
 class TestHostedGeminiText2Text(unittest.TestCase):

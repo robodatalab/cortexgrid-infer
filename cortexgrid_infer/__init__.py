@@ -7,8 +7,9 @@ nothing else, split along the two things a model is:
 
 - where its weights come from - an importer per source (`importers`), which
   names, fetches and sizes them;
-- what runs it - a serve app per task (`models`), which loads the weights,
-  answers the task's routes, and names the client that speaks them.
+- what runs it - a serve app per task (`serve_apps`), which loads the weights,
+  answers the task's routes (`protocols`), and names the client that speaks
+  them.
 
     imp = cortexgrid_infer.HuggingFaceImporter("Qwen/Qwen2.5-0.5B-Instruct", cortexgrid_infer.Text2Text)
     with imp:
@@ -37,18 +38,23 @@ from cortexgrid_infer.core import (
     GeneratingModel,
     MeshingModel,
     Message,
+    RewritingModel,
     Tool,
     ToolCall,
     ToolSpec,
     complete,
     generate,
     mesh,
+    rewrite,
 )
-from cortexgrid_infer.completion import ServedCompletingModel
-from cortexgrid_infer.imaging import ServedGeneratingModel
-from cortexgrid_infer.meshing import ServedMeshingModel
+from cortexgrid_infer.protocols import (
+    ServedCompletingModel,
+    ServedGeneratingModel,
+    ServedMeshingModel,
+    ServedRewritingModel,
+)
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.models import (
+from cortexgrid_infer.serve_apps import (
     AnthropicText2Text,
     GeminiText2Image,
     GeminiText2Text,
@@ -57,6 +63,7 @@ from cortexgrid_infer.models import (
     LocalModel,
     Text2Image,
     Text2Text,
+    TextRewriter,
     Weights,
 )
 from cortexgrid_infer.registry import Hosted, ModelEntry, split_model_id
@@ -70,6 +77,7 @@ __all__ = [
     "GeneratedMesh",
     "GeneratingModel",
     "MeshingModel",
+    "RewritingModel",
     "Message",
     "Tool",
     "ToolCall",
@@ -77,17 +85,20 @@ __all__ = [
     "complete",
     "generate",
     "mesh",
+    "rewrite",
     "ModelDeployFailed",
     "detect_device",
     "ServedCompletingModel",
     "ServedGeneratingModel",
     "ServedMeshingModel",
+    "ServedRewritingModel",
     "LocalModel",
     "HostedModel",
     "Weights",
     "Text2Text",
     "Text2Image",
     "Image2Mesh",
+    "TextRewriter",
     "AnthropicText2Text",
     "GeminiText2Text",
     "GeminiText2Image",

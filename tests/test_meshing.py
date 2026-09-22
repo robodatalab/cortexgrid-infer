@@ -16,9 +16,9 @@ import numpy as np
 from PIL import Image
 
 from cortexgrid_infer.core import GeneratedMesh
-from cortexgrid_infer.meshing import ServedMeshingModel
-from cortexgrid_infer.models.base import Weights
-from cortexgrid_infer.models.image2mesh import Image2Mesh
+from cortexgrid_infer.protocols.meshing import ServedMeshingModel
+from cortexgrid_infer.serve_apps.base import Weights
+from cortexgrid_infer.serve_apps.image2mesh import Image2Mesh
 
 TRIANGLE = GeneratedMesh(
     vertices=np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0]], dtype=np.float32),
@@ -76,7 +76,7 @@ class _TriangleDeployment(Image2Mesh):
 
 
 class TestImage2Mesh(unittest.TestCase):
-    SERVE = "cortexgrid_infer.models.image2mesh"
+    SERVE = "cortexgrid_infer.serve_apps.image2mesh"
 
     def setUp(self):
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/weights"), \
@@ -110,7 +110,7 @@ class TestImage2Mesh(unittest.TestCase):
 
 class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
     async def test_round_trips_a_mesh_through_the_protocol(self):
-        with mock.patch("cortexgrid_infer.models.image2mesh.cortexgrid.load_model", return_value="/w"):
+        with mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.load_model", return_value="/w"):
             deployment = _TriangleDeployment("family", "suffix", "imported")
         model = ServedMeshingModel(url="http://h/r/Tri/base/R", model_id="org/Tri")
         payload: dict[str, Any] = {}
@@ -120,7 +120,7 @@ class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
                 type(self).captured = {"url": url, "json": json}
                 return _FakeResponse(await deployment.mesh(dict(json)))
 
-        with mock.patch("cortexgrid_infer.meshing.httpx.AsyncClient", lambda *_a, **_kw: _Served(payload)):
+        with mock.patch("cortexgrid_infer.protocols.meshing.httpx.AsyncClient", lambda *_a, **_kw: _Served(payload)):
             made = await model.mesh(_png(Image.new("RGBA", (8, 8))), resolution=32)
 
         np.testing.assert_array_equal(made.vertices, TRIANGLE.vertices)

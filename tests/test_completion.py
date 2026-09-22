@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.completion."""
+"""Tests for cortexgrid_infer.protocols.completion."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest import mock
 
-from cortexgrid_infer.completion import (
+from cortexgrid_infer.protocols.completion import (
     ServedCompletingModel,
     encode_tool_call,
     parse_tool_calls,
@@ -81,7 +81,7 @@ def _patch_httpx_client(chunks: list[str]):
     def factory(*_a: Any, **_kw: Any) -> _FakeAsyncClient:
         return _FakeAsyncClient(chunks)
 
-    return mock.patch("cortexgrid_infer.completion.httpx.AsyncClient", factory)
+    return mock.patch("cortexgrid_infer.protocols.completion.httpx.AsyncClient", factory)
 
 
 class TestServedCompletingModelComplete(unittest.IsolatedAsyncioTestCase):

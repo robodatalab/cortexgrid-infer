@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.models.anthropic, registered as a Hosted entry."""
+"""Tests for cortexgrid_infer.serve_apps.anthropic, registered as a Hosted entry."""
 
 from __future__ import annotations
 
@@ -7,15 +7,15 @@ from unittest import mock
 
 import cortexgrid
 
-from cortexgrid_infer.completion import ServedCompletingModel
-from cortexgrid_infer.models.anthropic import (
+from cortexgrid_infer.protocols.completion import ServedCompletingModel
+from cortexgrid_infer.registry import Hosted
+from cortexgrid_infer.serve_apps.anthropic import (
     AnthropicText2Text,
     to_anthropic_messages,
     to_anthropic_tools,
 )
-from cortexgrid_infer.registry import Hosted
 
-SERVE = "cortexgrid_infer.models.anthropic"
+SERVE = "cortexgrid_infer.serve_apps.anthropic"
 
 
 class TestHostedAnthropic(unittest.TestCase):

@@ -109,6 +109,15 @@ class MeshingModel(DeployedModel):
     async def mesh(self, image: bytes, **kwargs: Any) -> GeneratedMesh: ...
 
 
+class RewritingModel(DeployedModel):
+    """A deployed model that rewrites one text into another - corrects,
+    paraphrases, summarises or translates it. Like generation, a single
+    request/response."""
+
+    @abc.abstractmethod
+    async def rewrite(self, text: str, max_new_tokens: int = 512, **kwargs: Any) -> str: ...
+
+
 async def complete(
     deployed_model: CompletingModel,
     messages: list[Message],
@@ -142,3 +151,13 @@ async def generate(
 async def mesh(deployed_model: MeshingModel, image: bytes, **kwargs: Any) -> GeneratedMesh:
     """Single image-to-mesh request to the deployed model."""
     return await deployed_model.mesh(image, **kwargs)
+
+
+async def rewrite(
+    deployed_model: RewritingModel,
+    text: str,
+    max_new_tokens: int = 512,
+    **kwargs: Any,
+) -> str:
+    """Single rewriting request to the deployed model."""
+    return await deployed_model.rewrite(text, max_new_tokens=max_new_tokens, **kwargs)

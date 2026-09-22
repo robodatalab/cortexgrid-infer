@@ -15,7 +15,7 @@ from huggingface_hub import HfApi, get_safetensors_metadata, snapshot_download
 from huggingface_hub.errors import NotASafetensorsRepoError
 
 from cortexgrid_infer.importers.base import Importer
-from cortexgrid_infer.models.base import LocalModel, Weights
+from cortexgrid_infer.serve_apps.base import LocalModel, Weights
 
 # Files that are weights rather than configs, tokenizers or docs. Used for the
 # fallback estimate, where a repo has no top-level safetensors index.

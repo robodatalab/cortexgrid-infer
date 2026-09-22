@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.models.base: how a serve app sizes a replica."""
+"""Tests for cortexgrid_infer.serve_apps.base: how a serve app sizes a replica."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import unittest
 
 import cortexgrid
 
-from cortexgrid_infer.models.base import HostedModel, LocalModel, Weights
+from cortexgrid_infer.serve_apps.base import HostedModel, LocalModel, Weights
 
 _GIB = 1 << 30
 

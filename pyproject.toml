@@ -22,7 +22,7 @@ dependencies = [
     "transformers>=4.47.0",
     "huggingface_hub>=0.20.0",
     "anthropic>=0.40.0",
-    # models.gemini. The unified Google Gen AI SDK, not the deprecated
+    # serve_apps.gemini. The unified Google Gen AI SDK, not the deprecated
     # google-generativeai.
     "google-genai>=1.0",
     "python-dotenv>=1.0.0",
@@ -30,7 +30,7 @@ dependencies = [
     # The serve-apps run on the cluster's FastAPI, which Ray 2.58's Serve
     # requires to be >=0.133.
     "fastapi>=0.133",
-    # Text-to-image serving (models.text2image). FLUX.2 pipelines land in
+    # Text-to-image serving (serve_apps.text2image). FLUX.2 pipelines land in
     # diffusers 0.38; the Qwen3 text encoder needs sentencepiece + protobuf.
     "diffusers>=0.38",
     "pillow>=10.0",

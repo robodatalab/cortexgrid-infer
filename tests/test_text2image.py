@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.models.text2image."""
+"""Tests for cortexgrid_infer.serve_apps.text2image."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from cortexgrid_infer.imaging import ServedGeneratingModel
 from cortexgrid_infer.importers.huggingface import HuggingFaceImporter
-from cortexgrid_infer.models.text2image import Text2Image
+from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
+from cortexgrid_infer.serve_apps.text2image import Text2Image
 
 
 class TestText2ImageForTheImporter(unittest.TestCase):
@@ -78,7 +78,7 @@ class TestText2ImageCompiles(unittest.TestCase):
     """The deployment compiles at construction; see
     cortexgrid_infer.compiling for why the denoiser is where it pays."""
 
-    SERVE = "cortexgrid_infer.models.text2image"
+    SERVE = "cortexgrid_infer.serve_apps.text2image"
 
     def build(self, device: str = "cuda") -> _FakePipeline:
         pipe = _FakePipeline()

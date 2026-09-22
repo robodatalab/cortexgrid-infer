@@ -15,7 +15,7 @@ from huggingface_hub.errors import NotASafetensorsRepoError
 
 from cortexgrid_infer.core import DeployedModel
 from cortexgrid_infer.importers.huggingface import HuggingFaceImporter, repo_weights
-from cortexgrid_infer.models.base import LocalModel, Weights
+from cortexgrid_infer.serve_apps.base import LocalModel, Weights
 
 HF = "cortexgrid_infer.importers.huggingface"
 
