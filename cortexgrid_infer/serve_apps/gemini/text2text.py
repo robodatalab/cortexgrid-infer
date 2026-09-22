@@ -15,9 +15,9 @@ from cortexgrid import serve
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
-from cortexgrid_infer.completion import ServedCompletingModel, encode_tool_call
 from cortexgrid_infer.core import Message, ToolSpec
-from cortexgrid_infer.models.gemini.base import GeminiModel
+from cortexgrid_infer.protocols.completion import ServedCompletingModel, encode_tool_call
+from cortexgrid_infer.serve_apps.gemini.base import GeminiModel
 
 _app = FastAPI()
 

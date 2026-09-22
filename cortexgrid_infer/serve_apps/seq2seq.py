@@ -9,8 +9,8 @@ from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import torch
 
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.models.base import LocalModel
-from cortexgrid_infer.seq2seq import ServedSeq2SeqModel
+from cortexgrid_infer.protocols.seq2seq import ServedSeq2SeqModel
+from cortexgrid_infer.serve_apps.base import LocalModel
 
 
 _app = FastAPI()

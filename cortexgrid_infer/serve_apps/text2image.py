@@ -1,5 +1,5 @@
 """The text-to-image serve app: a diffusers pipeline loaded from the cortexgrid
-registry, answering `POST /generate` (see `cortexgrid_infer.imaging`).
+registry, answering `POST /generate` (see `cortexgrid_infer.protocols.imaging`).
 
 The pipeline class is not hardcoded: it is read from the model's
 ``model_index.json`` (``_class_name``) and resolved against ``diffusers``, so
@@ -28,8 +28,8 @@ import torch
 
 from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.imaging import ServedGeneratingModel
-from cortexgrid_infer.models.base import LocalModel
+from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
+from cortexgrid_infer.serve_apps.base import LocalModel
 
 
 _app = FastAPI()

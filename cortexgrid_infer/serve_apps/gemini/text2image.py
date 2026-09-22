@@ -1,7 +1,7 @@
 """The text-to-image serve app that forwards to the Gemini API.
 
 It answers the same `POST /generate` route as `Text2Image` (see
-`cortexgrid_infer.imaging`), so the same client talks to it. It takes a prompt
+`cortexgrid_infer.protocols.imaging`), so the same client talks to it. It takes a prompt
 only. Of the sampling options, `size` and `seed` have a Gemini counterpart;
 `steps` and `guidance` are diffusion settings, and are reported back as unused.
 """
@@ -18,8 +18,8 @@ from fastapi import FastAPI, HTTPException
 from google.genai import types
 from PIL import Image
 
-from cortexgrid_infer.imaging import ServedGeneratingModel
-from cortexgrid_infer.models.gemini.base import GeminiModel
+from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
+from cortexgrid_infer.serve_apps.gemini.base import GeminiModel
 
 _app = FastAPI()
 

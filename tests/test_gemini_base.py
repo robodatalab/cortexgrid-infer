@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.models.gemini.base: the config every Gemini serve
+"""Tests for cortexgrid_infer.serve_apps.gemini.base: the config every Gemini serve
 app registers with, and reads back when it is deployed."""
 
 from __future__ import annotations
@@ -6,10 +6,10 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
-from cortexgrid_infer.models.gemini.base import GeminiModel
 from cortexgrid_infer.registry import Hosted
+from cortexgrid_infer.serve_apps.gemini.base import GeminiModel
 
-BASE = "cortexgrid_infer.models.gemini.base"
+BASE = "cortexgrid_infer.serve_apps.gemini.base"
 
 
 class TestConfig(unittest.TestCase):

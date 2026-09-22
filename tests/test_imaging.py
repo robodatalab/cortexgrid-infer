@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.imaging."""
+"""Tests for cortexgrid_infer.protocols.imaging."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from cortexgrid_infer.imaging import ServedGeneratingModel
+from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
 
 
 class _FakeResponse:
@@ -42,7 +42,7 @@ def _patch_httpx_client(payload: dict[str, Any]):
     def factory(*_a: Any, **_kw: Any) -> _FakeAsyncClient:
         return _FakeAsyncClient(payload)
 
-    return mock.patch("cortexgrid_infer.imaging.httpx.AsyncClient", factory)
+    return mock.patch("cortexgrid_infer.protocols.imaging.httpx.AsyncClient", factory)
 
 
 class TestServedGeneratingModelGenerate(unittest.IsolatedAsyncioTestCase):

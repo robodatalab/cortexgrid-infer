@@ -28,9 +28,9 @@ from transformers import (
 import torch
 
 from cortexgrid_infer import compiling
-from cortexgrid_infer.completion import ServedCompletingModel
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.models.base import LocalModel
+from cortexgrid_infer.protocols.completion import ServedCompletingModel
+from cortexgrid_infer.serve_apps.base import LocalModel
 
 
 log = logging.getLogger(__name__)

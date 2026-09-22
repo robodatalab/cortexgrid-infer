@@ -7,9 +7,9 @@ the mesh as base64 little-endian arrays - `vertices` float32 x, y, z, `faces`
 int32 indices, `colours` uint8 r, g, b per vertex - in the frame
 `GeneratedMesh` documents, and `params`, what the model resolved.
 
-Every such app speaks it through `cortexgrid_infer.models.image2mesh.Image2Mesh`,
-so one client, `ServedMeshingModel`, serves every model of the task whoever
-made it.
+Every such app speaks it through
+`cortexgrid_infer.serve_apps.image2mesh.Image2Mesh`, so one client,
+`ServedMeshingModel`, serves every model of the task whoever made it.
 """
 
 from __future__ import annotations

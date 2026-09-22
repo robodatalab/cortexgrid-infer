@@ -1,4 +1,4 @@
-"""Tests for cortexgrid_infer.models.gemini.text2image, registered as a Hosted entry."""
+"""Tests for cortexgrid_infer.serve_apps.gemini.text2image, registered as a Hosted entry."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from fastapi import HTTPException
 from google.genai import types
 from PIL import Image
 
-from cortexgrid_infer.imaging import ServedGeneratingModel
-from cortexgrid_infer.models.gemini.text2image import GeminiText2Image, image_size
+from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
 from cortexgrid_infer.registry import Hosted
+from cortexgrid_infer.serve_apps.gemini.text2image import GeminiText2Image, image_size
 
-BASE = "cortexgrid_infer.models.gemini.base"
+BASE = "cortexgrid_infer.serve_apps.gemini.base"
 
 
 def _picture(format: str, size: tuple[int, int] = (8, 4)) -> bytes:

@@ -30,8 +30,8 @@ from typing import Self
 import cortexgrid
 
 from cortexgrid_infer.core import DeployedModel
-from cortexgrid_infer.models.base import LocalModel, Weights
 from cortexgrid_infer.registry import ModelEntry, split_model_id
+from cortexgrid_infer.serve_apps.base import LocalModel, Weights
 
 
 class Importer(ModelEntry):

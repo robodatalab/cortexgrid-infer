@@ -6,8 +6,8 @@ There is no one loader for image-to-mesh models the way `AutoModelForCausalLM`
 or a diffusers `model_index.json` serves a whole family of repos: each model
 ships its own code. So a model's serve app subclasses `Image2Mesh` and supplies
 `load` and `make_mesh`; the subclass inherits the route, whose protocol is
-`cortexgrid_infer.meshing`'s, and the client that speaks it. cortexgrid bundles
-the subclass's own file, so the model's code travels with it.
+`cortexgrid_infer.protocols.meshing`'s, and the client that speaks it.
+cortexgrid bundles the subclass's own file, so the model's code travels with it.
 
     class MyMesh(Image2Mesh):
         min_vram_gb = 6.0
@@ -31,11 +31,11 @@ from fastapi import FastAPI
 from PIL import Image, ImageOps
 import torch
 
-from cortexgrid_infer import meshing
 from cortexgrid_infer.core import GeneratedMesh
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.meshing import ServedMeshingModel
-from cortexgrid_infer.models.base import LocalModel
+from cortexgrid_infer.protocols import meshing
+from cortexgrid_infer.protocols.meshing import ServedMeshingModel
+from cortexgrid_infer.serve_apps.base import LocalModel
 
 
 _app = FastAPI()

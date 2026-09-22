@@ -12,7 +12,7 @@ from __future__ import annotations
 import cortexgrid
 from google import genai
 
-from cortexgrid_infer.models.base import HostedModel
+from cortexgrid_infer.serve_apps.base import HostedModel
 
 # Keys the registry entry must carry for the deployment to reach the API.
 MODEL_PARAM = "model"

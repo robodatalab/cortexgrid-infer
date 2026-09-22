@@ -28,7 +28,7 @@ import abc
 import cortexgrid
 
 from cortexgrid_infer.core import DeployedModel
-from cortexgrid_infer.models.base import HostedModel
+from cortexgrid_infer.serve_apps.base import HostedModel
 
 
 def split_model_id(model_id: str) -> tuple[str, str]:

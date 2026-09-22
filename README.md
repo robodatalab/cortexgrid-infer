@@ -21,10 +21,10 @@ Upgrading from 0.2.x? See [MIGRATION.md](https://github.com/robodatalab/cortexgr
 
 A model is two things, and the library keeps them apart:
 
-- **What runs it** — a serve app in `cortexgrid_infer.models`, named for the task it
-  runs, not for where the model came from. It loads the weights, answers the task's
-  routes, and names the client that speaks them. One serve app runs every model of
-  its task, whichever source staged it.
+- **What runs it** — a serve app in `cortexgrid_infer.serve_apps`, named for the task
+  it runs, not for where the model came from. It loads the weights, answers the task's
+  routes (defined in `cortexgrid_infer.protocols`), and names the client that speaks
+  them. One serve app runs every model of its task, whichever source staged it.
 - **Where its weights come from** — an importer in `cortexgrid_infer.importers`, one
   per source. It names the model in the registry, downloads the weights, and sizes
   them from the source's metadata. It is handed the serve app, so one importer takes

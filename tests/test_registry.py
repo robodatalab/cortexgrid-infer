@@ -7,8 +7,8 @@ import unittest
 import cortexgrid
 
 from cortexgrid_infer.core import DeployedModel
-from cortexgrid_infer.models.base import HostedModel
 from cortexgrid_infer.registry import Hosted, split_model_id
+from cortexgrid_infer.serve_apps.base import HostedModel
 
 
 class _FakeModel(DeployedModel):

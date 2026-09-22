@@ -7,10 +7,10 @@ from unittest import mock
 
 import torch
 
-from cortexgrid_infer.models.seq2seq import Seq2Seq
-from cortexgrid_infer.seq2seq import ServedSeq2SeqModel
+from cortexgrid_infer.protocols.seq2seq import ServedSeq2SeqModel
+from cortexgrid_infer.serve_apps.seq2seq import Seq2Seq
 
-SERVE = "cortexgrid_infer.models.seq2seq"
+SERVE = "cortexgrid_infer.serve_apps.seq2seq"
 
 
 class _FakeTokenizedText(dict):
@@ -119,7 +119,7 @@ class TestServedSeq2SeqModel(unittest.IsolatedAsyncioTestCase):
                 return _FakeResponse(await deployment.generate(dict(json)))
 
         client = Seq2Seq.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
-        with mock.patch("cortexgrid_infer.seq2seq.httpx.AsyncClient",
+        with mock.patch("cortexgrid_infer.protocols.seq2seq.httpx.AsyncClient",
                         _FakeAsyncClientServedBySeq2Seq):
             generated = await client.generate("gec: She go home.", max_new_tokens=128)
 
