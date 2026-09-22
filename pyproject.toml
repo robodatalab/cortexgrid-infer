@@ -1,6 +1,6 @@
 [project]
 name = "cortexgrid-infer"
-version = "0.3.6"
+version = "0.3.5"
 description = "Serve apps per task (text-to-text, text-to-image, image-to-mesh) and importers per source (HuggingFace) for running models on cortexgrid"
 readme = "README.md"
 license = "Apache-2.0"

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import cortexgrid
 from cortexgrid import serve
 import numpy as np
 from PIL import Image
@@ -92,7 +93,7 @@ class TestImage2Mesh(unittest.TestCase):
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/weights"), \
              mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value={}), \
              mock.patch(f"{self.SERVE}.detect_device", return_value="cpu"):
-            self.deployment = _TriangleDeployment("family", "suffix", "imported")
+            self.deployment = _TriangleDeployment(cortexgrid.DeploymentKey("family", "suffix", "imported"))
 
     def mesh(self, **body: Any) -> dict[str, Any]:
         image = base64.b64encode(_png(Image.new("RGBA", (40, 20)))).decode("ascii")
@@ -123,7 +124,7 @@ class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
     async def test_round_trips_a_mesh_through_the_protocol(self):
         with mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.load_model", return_value="/w"), \
              mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.model_config", return_value={}):
-            deployment = _TriangleDeployment("family", "suffix", "imported")
+            deployment = _TriangleDeployment(cortexgrid.DeploymentKey("family", "suffix", "imported"))
         model = ServedMeshingModel(url="http://h/r/Tri/base/R", model_id="org/Tri")
         payload: dict[str, Any] = {}
 
@@ -152,7 +153,7 @@ class TestImage2MeshCompiles(unittest.TestCase):
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/weights"), \
              mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value=card), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=device):
-            return app("family", "suffix", "imported")
+            return app(cortexgrid.DeploymentKey("family", "suffix", "imported"))
 
     def test_hands_the_model_its_device_to_compile_on_when_the_card_asks(self):
         deployment = self.build({"compile": "true"})

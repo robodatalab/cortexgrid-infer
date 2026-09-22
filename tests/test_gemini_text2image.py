@@ -79,7 +79,9 @@ class TestGenerate(unittest.TestCase):
             }
             call = mock.AsyncMock(return_value=response)
             mock_genai.Client.return_value.aio.models.generate_content = call
-            deployment = GeminiText2Image("gemini-2.5-flash", "image", "imported")
+            deployment = GeminiText2Image(
+                cortexgrid.DeploymentKey("gemini-2.5-flash", "image", "imported")
+            )
 
             return asyncio.run(GeminiText2Image.generate(deployment, body)), call
 

@@ -118,7 +118,9 @@ def main() -> None:
         chat(imp.client(deployment.url))
     finally:
         print("deleting")
-        cortexgrid.undeploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED)
+        cortexgrid.undeploy_model(
+            cortexgrid.DeploymentKey(imp.family, imp.suffix, cortexgrid.IMPORTED)
+        )
         cortexgrid.delete_model(imp.family, imp.suffix, cortexgrid.IMPORTED)
 
 

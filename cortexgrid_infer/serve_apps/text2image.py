@@ -84,8 +84,8 @@ class Text2Image(LocalModel):
     def client(cls, url: str, name: str) -> ServedGeneratingModel:
         return ServedGeneratingModel(url=url, model_id=name)
 
-    def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        path = cortexgrid.load_model(family, suffix, run_name)
+    def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
+        path = cortexgrid.load_model(deployment.family, deployment.suffix, deployment.run_name)
         self._device = detect_device()
         pipe = _pipeline_class(path).from_pretrained(path, torch_dtype=torch.bfloat16)
         pipe = pipe.to(self._device)
@@ -95,7 +95,7 @@ class Text2Image(LocalModel):
             vae.enable_tiling()
         self._pipe = pipe
         # A denoising schedule is a loop of identically shaped forwards: capture once, replay.
-        settings = cortexgrid.model_config(family, suffix, run_name)
+        settings = cortexgrid.model_config(deployment)
         requested = settings.get(COMPILE_PARAM, "false") == "true"
         self._compiled = (
             compiling.compile_pipeline(pipe, self._device, compiling.Mode.GRAPHED)

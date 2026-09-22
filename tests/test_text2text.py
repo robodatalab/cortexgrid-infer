@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import cortexgrid
 import torch
 import unittest
 from unittest import mock
@@ -75,7 +76,7 @@ class TestText2TextCompiles(unittest.TestCase):
                         return_value=model), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device(device)):
             self.deployment = Text2Text(
-                "family", "suffix", "imported"
+                cortexgrid.DeploymentKey("family", "suffix", "imported")
             )
         return model
 
@@ -140,7 +141,7 @@ class TestText2TextThinks(unittest.TestCase):
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=_FakeCausalLM()), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cpu")):
-            return Text2Text("family", "suffix", "imported")
+            return Text2Text(cortexgrid.DeploymentKey("family", "suffix", "imported"))
 
     def test_takes_whether_to_think_from_the_model_card(self):
         self.assertFalse(self.build({"enable_thinking": "false"})._enable_thinking)
@@ -164,7 +165,7 @@ class TestPromptTruncation(unittest.TestCase):
                         return_value=model), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cuda")):
             self.deployment = Text2Text(
-                "family", "suffix", "imported"
+                cortexgrid.DeploymentKey("family", "suffix", "imported")
             )
 
     def inputs(self, length: int) -> dict:

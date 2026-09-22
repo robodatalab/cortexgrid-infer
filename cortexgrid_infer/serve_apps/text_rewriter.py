@@ -50,15 +50,15 @@ class TextRewriter(LocalModel):
     def client(cls, url: str, name: str) -> ServedRewritingModel:
         return ServedRewritingModel(url=url, model_id=name)
 
-    def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        path = cortexgrid.load_model(family, suffix, run_name)
+    def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
+        path = cortexgrid.load_model(deployment.family, deployment.suffix, deployment.run_name)
         self._device = detect_device()
         self._tokenizer = AutoTokenizer.from_pretrained(path)
         self._model = AutoModelForSeq2SeqLM.from_pretrained(
             str(path), torch_dtype=torch.bfloat16
         )
         self._model.to(self._device)
-        settings = cortexgrid.model_config(family, suffix, run_name)
+        settings = cortexgrid.model_config(deployment)
         # As in Text2Text: a static cache pins the decoder's self-attention to
         # one shape, and transformers compiles the decode step itself. The
         # cross-attention cache is pinned by padding the text; see `_tokenize`.

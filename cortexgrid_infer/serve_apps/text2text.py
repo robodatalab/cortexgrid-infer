@@ -72,8 +72,10 @@ class Text2Text(LocalModel):
     def client(cls, url: str, name: str) -> ServedCompletingModel:
         return ServedCompletingModel(url=url, model_id=name)
 
-    def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        path = cortexgrid.load_model(family, suffix, run_name)
+    def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
+        path = cortexgrid.load_model(
+            deployment.family, deployment.suffix, deployment.run_name
+        )
         self._device = detect_device()
         self._tokenizer = AutoTokenizer.from_pretrained(path)
         if self._tokenizer.pad_token is None:
@@ -82,7 +84,7 @@ class Text2Text(LocalModel):
             str(path), torch_dtype=torch.float16
         )
         self._model.to(self._device)  # type: ignore
-        settings = cortexgrid.model_config(family, suffix, run_name)
+        settings = cortexgrid.model_config(deployment)
         context = getattr(
             self._model.config, "max_position_embeddings", DEFAULT_MAX_TOTAL_TOKENS
         )

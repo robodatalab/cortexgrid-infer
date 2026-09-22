@@ -54,10 +54,11 @@ class Image2Mesh(LocalModel):
     def client(cls, url: str, name: str) -> ServedMeshingModel:
         return ServedMeshingModel(url=url, model_id=name)
 
-    def __init__(self, family: str, suffix: str, run_name: str) -> None:
+    def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         self.device = detect_device()
-        self.load(Path(cortexgrid.load_model(family, suffix, run_name)), self.device)
-        settings = cortexgrid.model_config(family, suffix, run_name)
+        path = cortexgrid.load_model(deployment.family, deployment.suffix, deployment.run_name)
+        self.load(Path(path), self.device)
+        settings = cortexgrid.model_config(deployment)
         requested = settings.get(COMPILE_PARAM, "false") == "true"
         self.compiled = requested and compiling.supported(self.device)
         if self.compiled:

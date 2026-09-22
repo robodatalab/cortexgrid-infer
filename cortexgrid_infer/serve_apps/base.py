@@ -31,9 +31,9 @@ _GIB = float(1 << 30)
 ENABLE_THINKING_PARAM = "enable_thinking"
 
 # Whether a replica runs its model through `torch.compile` (see
-# `cortexgrid_infer.compiling`). Off unless the model card says "true": compiled
-# serving pays a warm-up per input shape, which is worth it only where traffic
-# repeats those shapes.
+# `cortexgrid_infer.compiling`). Off unless the deployment's config says
+# "true": compiled serving pays a warm-up per input shape, which is worth it
+# only where traffic repeats those shapes.
 COMPILE_PARAM = "compile"
 
 # Weights are only part of what a replica holds. The multiplier covers CUDA
