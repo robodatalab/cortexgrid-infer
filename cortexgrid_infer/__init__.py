@@ -50,6 +50,8 @@ from cortexgrid_infer.meshing import ServedMeshingModel
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.models import (
     AnthropicText2Text,
+    GeminiText2Image,
+    GeminiText2Text,
     HostedModel,
     Image2Mesh,
     LocalModel,
@@ -87,6 +89,8 @@ __all__ = [
     "Text2Image",
     "Image2Mesh",
     "AnthropicText2Text",
+    "GeminiText2Text",
+    "GeminiText2Image",
     "ModelEntry",
     "Hosted",
     "split_model_id",
