@@ -92,6 +92,7 @@ def main() -> None:
     requirements = imp.requirements()
     print(f"requirements: {requirements}")
 
+    deployment = None
     try:
         print(f"importing {HF_ID} as {imp.family}/{imp.suffix}")
         job = cortexgrid.remote(
@@ -118,9 +119,8 @@ def main() -> None:
         chat(imp.client(deployment.url))
     finally:
         print("deleting")
-        cortexgrid.undeploy_model(
-            cortexgrid.DeploymentKey(imp.family, imp.suffix, cortexgrid.IMPORTED)
-        )
+        if deployment is not None:
+            cortexgrid.undeploy_model(deployment.key)
         cortexgrid.delete_model(imp.family, imp.suffix, cortexgrid.IMPORTED)
 
 
