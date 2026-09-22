@@ -108,6 +108,17 @@ class TestTheServeAppDecides(unittest.TestCase):
 
         weights.assert_called_once_with("org/repo", None, ["*.md"])
 
+    def test_the_model_card_carries_the_serve_app_s_settings(self):
+        class _ThinkingApp(_FakeApp):
+            @classmethod
+            def config(cls) -> dict[str, str]:
+                return {"enable_thinking": "true"}
+
+        self.assertEqual(
+            HuggingFaceImporter("org/repo", _ThinkingApp).config(), {"enable_thinking": "true"}
+        )
+        self.assertEqual(HuggingFaceImporter("org/repo", _FakeApp).config(), {})
+
 
 class TestScratchDirectory(unittest.TestCase):
     def test_source_outside_a_context_is_an_error(self):

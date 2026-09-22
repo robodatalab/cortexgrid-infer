@@ -35,6 +35,9 @@ _tool_call_id_counter = itertools.count()
 
 TOOL_CALL_OPENERS = ["<tool_call>", "<|tool_call|>", "```tool_call"]
 
+THINKING_OPENER = "<think>"
+THINKING_CLOSER = "</think>"
+
 TOOL_CALL_PATTERNS = [
     re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL),
     re.compile(r"<\|tool_call\|>\s*(\{.*?\})\s*<\|/tool_call\|>", re.DOTALL),
@@ -51,23 +54,27 @@ def encode_tool_call(name: str, arguments: dict[str, Any]) -> str:
     return f'<tool_call>{json.dumps({"name": name, "arguments": arguments})}</tool_call>'
 
 
-def _find_opener(text: str) -> int | None:
-    """Find the earliest tool call opener position in text, or None."""
+def encode_thinking(text: str) -> str:
+    return f"{THINKING_OPENER}{text}{THINKING_CLOSER}"
+
+
+def _find_opener(text: str, openers: Sequence[str]) -> int | None:
+    """Find the earliest position of any of `openers` in text, or None."""
     earliest = None
-    for opener in TOOL_CALL_OPENERS:
+    for opener in openers:
         idx = text.find(opener)
         if idx != -1 and (earliest is None or idx < earliest):
             earliest = idx
     return earliest
 
 
-def _split_at_potential_prefix(text: str) -> tuple[str, str]:
+def _split_at_potential_prefix(text: str, openers: Sequence[str]) -> tuple[str, str]:
     """Split text into (safe_to_stream, potential_opener_prefix).
 
-    The second part is a suffix that could be the beginning of a tool call
-    opening tag, so it must be held back until more text arrives.
+    The second part is a suffix that could be the beginning of one of
+    `openers`, so it must be held back until more text arrives.
     """
-    for opener in TOOL_CALL_OPENERS:
+    for opener in openers:
         for length in range(1, len(opener)):
             if text.endswith(opener[:length]):
                 return text[:-length], text[-length:]
@@ -144,8 +151,10 @@ class ServedCompletingModel(CompletingModel):
         }
 
         pending = ""
+        in_thinking = False
         in_tool_call = False
         tool_call_text = ""
+        openers = [THINKING_OPENER, *TOOL_CALL_OPENERS]
 
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream(
@@ -162,22 +171,43 @@ class ServedCompletingModel(CompletingModel):
 
                     pending += text
 
-                    opener_pos = _find_opener(pending)
-                    if opener_pos is not None:
+                    while pending and not in_tool_call:
+                        if in_thinking:
+                            closer_pos = pending.find(THINKING_CLOSER)
+                            if closer_pos == -1:
+                                thought, pending = _split_at_potential_prefix(
+                                    pending, [THINKING_CLOSER]
+                                )
+                                if thought:
+                                    yield CompletionChunk(thinking=thought)
+                                break
+                            if closer_pos:
+                                yield CompletionChunk(thinking=pending[:closer_pos])
+                            pending = pending[closer_pos + len(THINKING_CLOSER) :]
+                            in_thinking = False
+                            continue
+
+                        opener_pos = _find_opener(pending, openers)
+                        if opener_pos is None:
+                            safe, pending = _split_at_potential_prefix(pending, openers)
+                            if safe:
+                                yield CompletionChunk(content=safe)
+                            break
+
                         before = pending[:opener_pos]
                         if before:
                             yield CompletionChunk(content=before)
-                        tool_call_text = pending[opener_pos:]
-                        in_tool_call = True
-                        pending = ""
-                        continue
+                        if pending.startswith(THINKING_OPENER, opener_pos):
+                            pending = pending[opener_pos + len(THINKING_OPENER) :]
+                            in_thinking = True
+                        else:
+                            tool_call_text = pending[opener_pos:]
+                            in_tool_call = True
+                            pending = ""
 
-                    safe, held = _split_at_potential_prefix(pending)
-                    if safe:
-                        yield CompletionChunk(content=safe)
-                    pending = held
-
-        if pending:
+        if pending and in_thinking:
+            yield CompletionChunk(thinking=pending)
+        elif pending:
             yield CompletionChunk(content=pending)
 
         if tool_call_text:

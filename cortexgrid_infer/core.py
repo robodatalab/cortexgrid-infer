@@ -25,6 +25,7 @@ class ToolCall:
 @dataclass
 class CompletionChunk:
     content: str = ""
+    thinking: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
 

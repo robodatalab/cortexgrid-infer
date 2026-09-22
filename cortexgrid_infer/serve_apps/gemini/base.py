@@ -44,6 +44,7 @@ class GeminiModel(HostedModel):
                 f"{family}/{suffix}/{run_name} is missing {sorted(missing)} from "
                 "its config; set them on the model card"
             )
+        self._config = config
         self._model = config[MODEL_PARAM]
         self._client = genai.Client(
             api_key=cortexgrid.get_secret(config[API_KEY_SECRET_PARAM])

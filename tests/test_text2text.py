@@ -21,6 +21,9 @@ class TestText2TextForTheImporter(unittest.TestCase):
         # Every file a causal LM repo ships is one `from_pretrained` may read.
         self.assertIsNone(Text2Text.ignore_patterns())
 
+    def test_the_model_card_lets_the_model_think_unless_told_otherwise(self):
+        self.assertEqual(Text2Text.config(), {"enable_thinking": "true"})
+
 
 class _ModelConfig:
     def __init__(self, max_position_embeddings=32768) -> None:
@@ -115,6 +118,25 @@ class TestText2TextCompiles(unittest.TestCase):
         self.assertFalse(self.deployment._compiled)
         self.assertIsNone(model.generation_config.cache_implementation)
         self.assertIsNone(model.generation_config.max_cache_len)
+
+
+class TestText2TextThinks(unittest.TestCase):
+    SERVE = "cortexgrid_infer.serve_apps.text2text"
+
+    def build(self, card: dict) -> Text2Text:
+        with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
+             mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value=card), \
+             mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
+             mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
+                        return_value=_FakeCausalLM()), \
+             mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cpu")):
+            return Text2Text("family", "suffix", "imported")
+
+    def test_takes_whether_to_think_from_the_model_card(self):
+        self.assertFalse(self.build({"enable_thinking": "false"})._enable_thinking)
+
+    def test_thinks_when_the_model_card_does_not_say(self):
+        self.assertTrue(self.build({})._enable_thinking)
 
 
 class TestPromptTruncation(unittest.TestCase):

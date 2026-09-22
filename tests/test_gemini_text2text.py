@@ -9,7 +9,11 @@ from unittest import mock
 import cortexgrid
 from google.genai import types
 
-from cortexgrid_infer.protocols.completion import ServedCompletingModel, encode_tool_call
+from cortexgrid_infer.protocols.completion import (
+    ServedCompletingModel,
+    encode_thinking,
+    encode_tool_call,
+)
 from cortexgrid_infer.registry import Hosted
 from cortexgrid_infer.serve_apps.gemini.text2text import (
     SKIP_THOUGHT_SIGNATURE,
@@ -39,6 +43,17 @@ class TestHostedGeminiText2Text(unittest.TestCase):
             cortexgrid.ModelRequirements(),
         )
 
+    def test_the_model_card_says_whether_the_model_thinks(self):
+        self.assertEqual(
+            Hosted("gemini-2.5-pro", GeminiText2Text).config()["enable_thinking"], "true"
+        )
+        self.assertEqual(
+            Hosted(
+                "gemini-2.5-flash", GeminiText2Text, enable_thinking="false"
+            ).config()["enable_thinking"],
+            "false",
+        )
+
 
 def _chunk(*parts: types.Part) -> types.GenerateContentResponse:
     return types.GenerateContentResponse(
@@ -52,7 +67,7 @@ async def _aiter(items):
 
 
 class TestComplete(unittest.TestCase):
-    def _complete(self, chunks, body):
+    def _complete(self, chunks, body, card=None):
         with (
             mock.patch(f"{BASE}.cortexgrid") as mock_cortexgrid,
             mock.patch(f"{BASE}.genai") as mock_genai,
@@ -60,6 +75,7 @@ class TestComplete(unittest.TestCase):
             mock_cortexgrid.model_config.return_value = {
                 "model": "gemini-2.5-pro",
                 "api_key_secret": "GEMINI_API_KEY",
+                **(card or {}),
             }
             generate = mock.AsyncMock(return_value=_aiter(chunks))
             mock_genai.Client.return_value.aio.models.generate_content_stream = generate
@@ -85,7 +101,7 @@ class TestComplete(unittest.TestCase):
 
         self.assertEqual(text, "let me check" + encode_tool_call("add", {"a": 1, "b": 2}))
 
-    def test_leaves_out_thoughts_and_empty_chunks(self):
+    def test_returns_thoughts_as_thinking_and_leaves_out_empty_chunks(self):
         text, _generate = self._complete(
             [
                 _chunk(types.Part(text="pondering", thought=True)),
@@ -95,7 +111,18 @@ class TestComplete(unittest.TestCase):
             {"messages": [{"role": "user", "content": "2+2?"}]},
         )
 
-        self.assertEqual(text, "4")
+        self.assertEqual(text, encode_thinking("pondering") + "4")
+
+    def test_a_model_card_with_thinking_off_asks_for_no_thinking(self):
+        _text, generate = self._complete(
+            [],
+            {"messages": [{"role": "user", "content": "2+2?"}]},
+            card={"enable_thinking": "false"},
+        )
+
+        self.assertEqual(
+            generate.call_args.kwargs["config"]["thinking_config"], {"thinking_budget": 0}
+        )
 
     def test_sends_the_configured_model_and_request_settings(self):
         _text, generate = self._complete(
@@ -119,6 +146,7 @@ class TestComplete(unittest.TestCase):
             {
                 "max_output_tokens": 64,
                 "temperature": 0.2,
+                "thinking_config": {"include_thoughts": True},
                 "system_instruction": "be terse",
                 "tools": [{"function_declarations": [{"name": "now", "description": ""}]}],
             },

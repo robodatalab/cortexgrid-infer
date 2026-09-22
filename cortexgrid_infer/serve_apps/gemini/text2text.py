@@ -16,8 +16,13 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
 from cortexgrid_infer.core import Message, ToolSpec
-from cortexgrid_infer.protocols.completion import ServedCompletingModel, encode_tool_call
-from cortexgrid_infer.serve_apps.gemini.base import GeminiModel
+from cortexgrid_infer.protocols.completion import (
+    ServedCompletingModel,
+    encode_thinking,
+    encode_tool_call,
+)
+from cortexgrid_infer.serve_apps.base import ENABLE_THINKING_PARAM
+from cortexgrid_infer.serve_apps.gemini.base import DEFAULT_API_KEY_SECRET, GeminiModel
 
 _app = FastAPI()
 
@@ -110,6 +115,18 @@ def to_gemini_tools(
 @serve.ingress(_app)
 class GeminiText2Text(GeminiModel):
     @classmethod
+    def config(
+        cls,
+        model_id: str,
+        api_key_secret: str = DEFAULT_API_KEY_SECRET,
+        enable_thinking: str = "true",
+    ) -> dict[str, str]:
+        return {
+            **super().config(model_id, api_key_secret),
+            ENABLE_THINKING_PARAM: enable_thinking,
+        }
+
+    @classmethod
     def client(cls, url: str, name: str) -> ServedCompletingModel:
         return ServedCompletingModel(url=url, model_id=name)
 
@@ -121,6 +138,11 @@ class GeminiText2Text(GeminiModel):
         generate_config: dict[str, Any] = {
             "max_output_tokens": body.get("max_new_tokens", 16 * 1024),
             "temperature": body.get("temperature", 0.7),
+            "thinking_config": (
+                {"include_thoughts": True}
+                if self._config.get(ENABLE_THINKING_PARAM, "true") == "true"
+                else {"thinking_budget": 0}
+            ),
         }
         if system_prompt:
             generate_config["system_instruction"] = system_prompt
@@ -140,7 +162,10 @@ class GeminiText2Text(GeminiModel):
                             part.function_call.name, dict(part.function_call.args or {})
                         ).encode("utf-8")
 
-                    elif part.text and not part.thought:
+                    elif part.text and part.thought:
+                        yield encode_thinking(part.text).encode("utf-8")
+
+                    elif part.text:
                         yield part.text.encode("utf-8")
 
         return StreamingResponse(stream(), media_type="text/plain")

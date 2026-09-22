@@ -9,6 +9,7 @@ from unittest import mock
 
 from cortexgrid_infer.protocols.completion import (
     ServedCompletingModel,
+    encode_thinking,
     encode_tool_call,
     parse_tool_calls,
 )
@@ -146,3 +147,60 @@ class TestServedCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tc.name, "add")
         self.assertEqual(tc.arguments, {"a": 2, "b": 3})
         self.assertEqual(tc(), 5)
+
+    async def streamed(self, chunks: list[str]) -> list[Any]:
+        model = ServedCompletingModel(url="http://x/r/f/s/r", model_id="Qwen/Qwen3-8B")
+        with _patch_httpx_client(chunks):
+            return [
+                c
+                async for c in model.complete(
+                    messages=[{"role": "user", "content": "hi"}]
+                )
+            ]
+
+    async def test_returns_the_thinking_apart_from_the_answer(self):
+        out = await self.streamed(
+            ["<think>", "Let me", " see.", "</think>", "\n\nThe answer."]
+        )
+
+        self.assertEqual("".join(c.thinking for c in out), "Let me see.")
+        self.assertEqual("".join(c.content for c in out), "\n\nThe answer.")
+
+    async def test_thinking_encoded_by_a_serve_app_comes_back_as_thinking(self):
+        out = await self.streamed([encode_thinking("pondering"), "4"])
+
+        self.assertEqual("".join(c.thinking for c in out), "pondering")
+        self.assertEqual("".join(c.content for c in out), "4")
+
+    async def test_finds_the_thinking_markers_split_across_chunks(self):
+        out = await self.streamed(["<thi", "nk>reason", "ing</th", "ink>answer"])
+
+        self.assertEqual("".join(c.thinking for c in out), "reasoning")
+        self.assertEqual("".join(c.content for c in out), "answer")
+
+    async def test_a_reply_cut_off_while_thinking_is_all_thinking(self):
+        out = await self.streamed(["<think>still ", "going"])
+
+        self.assertEqual("".join(c.thinking for c in out), "still going")
+        self.assertEqual("".join(c.content for c in out), "")
+        self.assertEqual(out[-1].finish_reason, "stop")
+
+    async def test_parses_a_tool_call_made_after_thinking(self):
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        model = ServedCompletingModel(url="http://x/r/f/s/r", model_id="Qwen/Qwen3-8B")
+        chunks = [
+            "<think>I should add.</think>",
+            '<tool_call>{"name": "add", "arguments": {"a": 2, "b": 3}}</tool_call>',
+        ]
+        with _patch_httpx_client(chunks):
+            out = [
+                c
+                async for c in model.complete(
+                    messages=[{"role": "user", "content": "hi"}], tools=[add]
+                )
+            ]
+
+        self.assertEqual("".join(c.thinking for c in out), "I should add.")
+        self.assertEqual([c.tool_calls[0]() for c in out if c.has_tool_calls], [5])
