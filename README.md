@@ -104,7 +104,7 @@ async def run():
 asyncio.run(run())
 
 # 4. Teardown.
-cortexgrid.undeploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED)  # free the GPU
+cortexgrid.undeploy_model(deployment.key)  # free the GPU
 cortexgrid.delete_model(imp.family, imp.suffix, cortexgrid.IMPORTED)    # and the weights
 ```
 
@@ -151,20 +151,24 @@ beyond the weights. (A `Hosted` entry asks for none — it holds no weights.)
 ## Compilation
 
 Every serve app that runs weights can run them through `torch.compile`, and none
-does unless asked: a replica is eager unless its model card carries
-`compile: "true"`. Each `LocalModel` writes `compile: "false"` onto the card at
-import, so turning it on is an edit of the card and a redeploy:
+does unless asked: a replica is eager unless its deployment's config carries
+`compile: "true"`. Each `LocalModel` writes `compile: "false"` onto the model card
+at import, so turning it on is a deployment that asks for it:
 
 ```python
-config = cortexgrid.model_config(family, suffix, cortexgrid.IMPORTED)
-cortexgrid.set_model_config(family, suffix, cortexgrid.IMPORTED, {**config, "compile": "true"})
-cortexgrid.deploy_model(family, suffix, cortexgrid.IMPORTED, wait=True)
+cortexgrid.deploy_model(family, suffix, cortexgrid.IMPORTED, wait=True, config={"compile": "true"})
 ```
+
+That is a separate, compiled deployment of the same model, alongside any uncompiled
+one: a model gets one deployment per distinct config, each at its own
+`deployment.url`. `Text2Text`'s `enable_thinking` and `max_total_tokens` are set per
+deployment the same way. Whatever a deployment leaves out comes from the model card,
+so the defaults `config()` writes there at import still apply.
 
 It is off by default because it is not free: every input shape pays a warm-up on
 the request that first brings it, and each CUDA graph holds memory of its own. It
 pays back where traffic keeps to a few shapes and the model is small enough for
-launch overhead to matter. A card asking for it off CUDA is served eager.
+launch overhead to matter. A deployment asking for it off CUDA is served eager.
 
 Compiled, a serve app runs `torch.compile` over the model it loads, because
 eager PyTorch bills per *operation* and a transformer forward is mostly glue —
@@ -205,7 +209,7 @@ Each serve app is tuned rather than defaulted:
   1.2 GB of keys and values re-read per generated token, several times the
   traffic of the model's own weights, to make room for a prompt nobody sent. It
   is pinned instead to the prompt and reply a caller plausibly sends: 4096 tokens,
-  or `max_total_tokens` on the model card, never past the model's own
+  or `max_total_tokens` from the deployment's config, never past the model's own
   `max_position_embeddings`. A reply takes at most half of it, so an
   over-optimistic `max_new_tokens` cannot squeeze the prompt to nothing, and a
   prompt that will not fit in the rest is truncated — keeping the end, since a

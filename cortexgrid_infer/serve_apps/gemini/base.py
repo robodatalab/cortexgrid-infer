@@ -36,13 +36,13 @@ class GeminiModel(HostedModel):
         holding the key to send it with."""
         return {MODEL_PARAM: model_id, API_KEY_SECRET_PARAM: api_key_secret}
 
-    def __init__(self, family: str, suffix: str, run_name: str) -> None:
-        config = cortexgrid.model_config(family, suffix, run_name)
+    def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
+        config = cortexgrid.model_config(deployment)
         missing = {MODEL_PARAM, API_KEY_SECRET_PARAM} - config.keys()
         if missing:
             raise RuntimeError(
-                f"{family}/{suffix}/{run_name} is missing {sorted(missing)} from "
-                "its config; set them on the model card"
+                f"{deployment.family}/{deployment.suffix}/{deployment.run_name} is "
+                f"missing {sorted(missing)} from its config; set them on the model card"
             )
         self._config = config
         self._model = config[MODEL_PARAM]

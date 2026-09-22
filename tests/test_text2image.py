@@ -6,6 +6,8 @@ import unittest
 from typing import Any
 from unittest import mock
 
+import cortexgrid
+
 from cortexgrid_infer.importers.huggingface import HuggingFaceImporter
 from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
 from cortexgrid_infer.serve_apps.text2image import Text2Image
@@ -92,7 +94,7 @@ class TestText2ImageCompiles(unittest.TestCase):
                         return_value={"compile": compile}), \
              mock.patch(f"{self.SERVE}._pipeline_class", return_value=pipeline_class), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device(device)):
-            self.deployment = Text2Image("family", "suffix", "imported")
+            self.deployment = Text2Image(cortexgrid.DeploymentKey("family", "suffix", "imported"))
         return pipe
 
     def test_compiles_the_denoiser_and_the_text_encoder(self):

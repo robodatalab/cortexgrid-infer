@@ -64,11 +64,11 @@ class TestAnthropicText2TextConfig(unittest.TestCase):
         }
         mock_cortexgrid.get_secret.return_value = "sk-ant-xxx"
 
-        deployment = AnthropicText2Text("claude-sonnet", "5", "imported")
+        key = cortexgrid.DeploymentKey("claude-sonnet", "5", "imported")
 
-        mock_cortexgrid.model_config.assert_called_once_with(
-            "claude-sonnet", "5", "imported"
-        )
+        deployment = AnthropicText2Text(key)
+
+        mock_cortexgrid.model_config.assert_called_once_with(key)
         mock_cortexgrid.get_secret.assert_called_once_with("TEAM_KEY")
         mock_client.assert_called_once_with(api_key="sk-ant-xxx")
         self.assertEqual(deployment._model, "claude-sonnet-5")
@@ -83,7 +83,9 @@ class TestAnthropicText2TextConfig(unittest.TestCase):
         mock_cortexgrid.model_config.return_value = {"model": "claude-sonnet-5"}
 
         with self.assertRaises(RuntimeError) as caught:
-            AnthropicText2Text("claude-sonnet", "5", "imported")
+            AnthropicText2Text(
+                cortexgrid.DeploymentKey("claude-sonnet", "5", "imported")
+            )
 
         self.assertIn("api_key_secret", str(caught.exception))
 

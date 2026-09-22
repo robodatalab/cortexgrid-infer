@@ -5,6 +5,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
+import cortexgrid
 import torch
 
 from cortexgrid_infer.protocols.rewriting import ServedRewritingModel
@@ -77,7 +78,7 @@ def _deployed_rewriter(
          mock.patch(f"{SERVE}.AutoTokenizer.from_pretrained", return_value=tokenizer), \
          mock.patch(f"{SERVE}.AutoModelForSeq2SeqLM.from_pretrained", return_value=model), \
          mock.patch(f"{SERVE}.detect_device", return_value=torch.device(device)):
-        deployment = TextRewriter("family", "suffix", "imported")
+        deployment = TextRewriter(cortexgrid.DeploymentKey("family", "suffix", "imported"))
     return deployment, tokenizer, model
 
 
@@ -97,7 +98,7 @@ class TestTextRewriterLoads(unittest.TestCase):
              mock.patch(f"{SERVE}.AutoModelForSeq2SeqLM.from_pretrained",
                         return_value=model) as loads, \
              mock.patch(f"{SERVE}.detect_device", return_value=torch.device("cpu")):
-            TextRewriter("family", "suffix", "imported")
+            TextRewriter(cortexgrid.DeploymentKey("family", "suffix", "imported"))
 
         tokenizer.assert_called_once_with("/w")
         loads.assert_called_once_with("/w", torch_dtype=torch.bfloat16)

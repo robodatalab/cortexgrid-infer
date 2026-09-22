@@ -79,7 +79,9 @@ class TestComplete(unittest.TestCase):
             }
             generate = mock.AsyncMock(return_value=_aiter(chunks))
             mock_genai.Client.return_value.aio.models.generate_content_stream = generate
-            deployment = GeminiText2Text("gemini-2.5", "pro", "imported")
+            deployment = GeminiText2Text(
+                cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported")
+            )
 
             async def run() -> bytes:
                 response = await GeminiText2Text.complete(deployment, body)

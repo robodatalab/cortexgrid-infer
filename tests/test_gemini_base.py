@@ -6,6 +6,8 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+import cortexgrid
+
 from cortexgrid_infer.registry import Hosted
 from cortexgrid_infer.serve_apps.gemini.base import GeminiModel
 
@@ -39,11 +41,11 @@ class TestConstruction(unittest.TestCase):
         }
         mock_cortexgrid.get_secret.return_value = "AIza-xxx"
 
-        deployment = GeminiModel("gemini-2.5", "pro", "imported")
+        key = cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported")
 
-        mock_cortexgrid.model_config.assert_called_once_with(
-            "gemini-2.5", "pro", "imported"
-        )
+        deployment = GeminiModel(key)
+
+        mock_cortexgrid.model_config.assert_called_once_with(key)
         mock_cortexgrid.get_secret.assert_called_once_with("TEAM_KEY")
         mock_genai.Client.assert_called_once_with(api_key="AIza-xxx")
         self.assertEqual(deployment._model, "gemini-2.5-pro")
@@ -58,6 +60,6 @@ class TestConstruction(unittest.TestCase):
         mock_cortexgrid.model_config.return_value = {"model": "gemini-2.5-pro"}
 
         with self.assertRaises(RuntimeError) as caught:
-            GeminiModel("gemini-2.5", "pro", "imported")
+            GeminiModel(cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"))
 
         self.assertIn("api_key_secret", str(caught.exception))
