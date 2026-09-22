@@ -63,6 +63,7 @@ from cortexgrid_infer.serve_apps import (
     LocalModel,
     Text2Image,
     Text2Text,
+    TextRewriter,
     Weights,
 )
 from cortexgrid_infer.registry import Hosted, ModelEntry, split_model_id
@@ -97,6 +98,7 @@ __all__ = [
     "Text2Text",
     "Text2Image",
     "Image2Mesh",
+    "TextRewriter",
     "AnthropicText2Text",
     "GeminiText2Text",
     "GeminiText2Image",

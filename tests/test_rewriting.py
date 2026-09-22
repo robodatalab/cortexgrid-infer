@@ -8,9 +8,9 @@ from unittest import mock
 import torch
 
 from cortexgrid_infer.protocols.rewriting import ServedRewritingModel
-from cortexgrid_infer.serve_apps.seq2seq import Seq2Seq
+from cortexgrid_infer.serve_apps.text_rewriter import TextRewriter
 
-SERVE = "cortexgrid_infer.serve_apps.seq2seq"
+SERVE = "cortexgrid_infer.serve_apps.text_rewriter"
 
 
 class _FakeTokenizedText(dict):
@@ -50,18 +50,18 @@ class _FakeResponse:
         return self._payload
 
 
-def _deployed_seq2seq() -> tuple[Seq2Seq, _FakeTokenizer, _FakeEncoderDecoder]:
+def _deployed_rewriter() -> tuple[TextRewriter, _FakeTokenizer, _FakeEncoderDecoder]:
     tokenizer = _FakeTokenizer()
     model = _FakeEncoderDecoder()
     with mock.patch(f"{SERVE}.cortexgrid.load_model", return_value="/w"), \
          mock.patch(f"{SERVE}.AutoTokenizer.from_pretrained", return_value=tokenizer), \
          mock.patch(f"{SERVE}.AutoModelForSeq2SeqLM.from_pretrained", return_value=model), \
          mock.patch(f"{SERVE}.detect_device", return_value=torch.device("cpu")):
-        deployment = Seq2Seq("family", "suffix", "imported")
+        deployment = TextRewriter("family", "suffix", "imported")
     return deployment, tokenizer, model
 
 
-class TestSeq2SeqLoads(unittest.TestCase):
+class TestTextRewriterLoads(unittest.TestCase):
     def test_loads_the_staged_encoder_decoder_in_bfloat16_on_the_detected_device(self):
         model = mock.Mock()
         with mock.patch(f"{SERVE}.cortexgrid.load_model", return_value="/w"), \
@@ -69,16 +69,16 @@ class TestSeq2SeqLoads(unittest.TestCase):
              mock.patch(f"{SERVE}.AutoModelForSeq2SeqLM.from_pretrained",
                         return_value=model) as loads, \
              mock.patch(f"{SERVE}.detect_device", return_value=torch.device("cpu")):
-            Seq2Seq("family", "suffix", "imported")
+            TextRewriter("family", "suffix", "imported")
 
         tokenizer.assert_called_once_with("/w")
         loads.assert_called_once_with("/w", torch_dtype=torch.bfloat16)
         model.to.assert_called_once_with(torch.device("cpu"))
 
 
-class TestSeq2SeqRewrites(unittest.TestCase):
+class TestTextRewriterRewrites(unittest.TestCase):
     def test_reads_the_text_as_sent_and_answers_with_the_decoded_generation(self):
-        deployment, tokenizer, _ = _deployed_seq2seq()
+        deployment, tokenizer, _ = _deployed_rewriter()
 
         reply = asyncio.run(deployment.rewrite({"text": "gec: She go home."}))
 
@@ -87,7 +87,7 @@ class TestSeq2SeqRewrites(unittest.TestCase):
         self.assertEqual(reply, {"text": "She goes home."})
 
     def test_hands_generate_every_option_the_request_carried(self):
-        deployment, _, model = _deployed_seq2seq()
+        deployment, _, model = _deployed_rewriter()
 
         asyncio.run(deployment.rewrite(
             {"text": "gec: She go home.", "max_new_tokens": 128, "do_sample": False}
@@ -101,14 +101,14 @@ class TestSeq2SeqRewrites(unittest.TestCase):
 
 class TestServedRewritingModel(unittest.IsolatedAsyncioTestCase):
     async def test_round_trips_a_rewrite_through_the_route(self):
-        deployment, _, model = _deployed_seq2seq()
+        deployment, _, model = _deployed_rewriter()
         posted: dict[str, Any] = {}
 
-        class _FakeAsyncClientServedBySeq2Seq:
+        class _FakeAsyncClientServedByTextRewriter:
             def __init__(self, *_args: Any, **_kwargs: Any) -> None:
                 pass
 
-            async def __aenter__(self) -> "_FakeAsyncClientServedBySeq2Seq":
+            async def __aenter__(self) -> "_FakeAsyncClientServedByTextRewriter":
                 return self
 
             async def __aexit__(self, *args: Any) -> None:
@@ -118,9 +118,9 @@ class TestServedRewritingModel(unittest.IsolatedAsyncioTestCase):
                 posted.update(url=url, json=json)
                 return _FakeResponse(await deployment.rewrite(dict(json)))
 
-        client = Seq2Seq.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
+        client = TextRewriter.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
         with mock.patch("cortexgrid_infer.protocols.rewriting.httpx.AsyncClient",
-                        _FakeAsyncClientServedBySeq2Seq):
+                        _FakeAsyncClientServedByTextRewriter):
             rewritten = await client.rewrite("gec: She go home.", max_new_tokens=128)
 
         self.assertIsInstance(client, ServedRewritingModel)

@@ -35,6 +35,7 @@ A model is two things, and the library keeps them apart:
 | `Text2Text` | text to text | any causal LM in the transformers layout, via `AutoModelForCausalLM` | `ServedCompletingModel` (`complete`) |
 | `Text2Image` | text (and image) to image | any diffusers pipeline | `ServedGeneratingModel` (`generate`) |
 | `Image2Mesh` — a base: subclass it with the model's `load` and `make_mesh` | image to mesh | the model the subclass loads, behind the task's `POST /mesh` | `ServedMeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
+| `TextRewriter` | text to text, rewritten | any encoder-decoder LM (T5, BART, Marian, ...) in the transformers layout, via `AutoModelForSeq2SeqLM` | `ServedRewritingModel` (`rewrite`: one text in, one text out) |
 | `AnthropicText2Text` | text to text | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
 | `GeminiText2Text` | text to text | the Gemini API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
 | `GeminiText2Image` | text to image | the Gemini API, forwarded from the cluster | `ServedGeneratingModel` (`generate`) |

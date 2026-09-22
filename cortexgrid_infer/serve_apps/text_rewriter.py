@@ -1,3 +1,12 @@
+"""The text-rewriting serve app: an encoder-decoder LM loaded from the cortexgrid
+registry, answering `POST /rewrite` (see `cortexgrid_infer.protocols.rewriting`).
+
+Loads with `AutoModelForSeq2SeqLM`, so it runs any encoder-decoder model (T5,
+BART, Marian, ...) whose weights are in the transformers layout, whichever
+importer staged them. Any task prefix the model expects (`gec: ` for grammar
+correction, say) is the caller's to put in the text.
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,7 +26,7 @@ _app = FastAPI()
 
 
 @serve.ingress(_app)
-class Seq2Seq(LocalModel):
+class TextRewriter(LocalModel):
     @classmethod
     def client(cls, url: str, name: str) -> ServedRewritingModel:
         return ServedRewritingModel(url=url, model_id=name)
