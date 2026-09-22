@@ -30,7 +30,11 @@ import torch
 from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.protocols.completion import ServedCompletingModel
-from cortexgrid_infer.serve_apps.base import ENABLE_THINKING_PARAM, LocalModel
+from cortexgrid_infer.serve_apps.base import (
+    COMPILE_PARAM,
+    ENABLE_THINKING_PARAM,
+    LocalModel,
+)
 
 
 log = logging.getLogger(__name__)
@@ -62,7 +66,7 @@ _RESERVED_BODY_KEYS = {
 class Text2Text(LocalModel):
     @classmethod
     def config(cls) -> dict[str, str]:
-        return {ENABLE_THINKING_PARAM: "true"}
+        return {**super().config(), ENABLE_THINKING_PARAM: "true"}
 
     @classmethod
     def client(cls, url: str, name: str) -> ServedCompletingModel:
@@ -90,7 +94,8 @@ class Text2Text(LocalModel):
         # pins the shape every forward sees, so the loop is captured once
         # instead of recompiled per token. transformers then compiles `generate`
         # itself, which is why the module is not compiled here as well.
-        self._compiled = compiling.supported(self._device)
+        requested = settings.get(COMPILE_PARAM, "false") == "true"
+        self._compiled = requested and compiling.supported(self._device)
         if self._compiled:
             config = self._model.generation_config
             config.cache_implementation = "static"

@@ -22,7 +22,10 @@ class TestText2TextForTheImporter(unittest.TestCase):
         self.assertIsNone(Text2Text.ignore_patterns())
 
     def test_the_model_card_lets_the_model_think_unless_told_otherwise(self):
-        self.assertEqual(Text2Text.config(), {"enable_thinking": "true"})
+        self.assertEqual(Text2Text.config()["enable_thinking"], "true")
+
+    def test_the_model_card_serves_eager_unless_told_otherwise(self):
+        self.assertEqual(Text2Text.config()["compile"], "false")
 
 
 class _ModelConfig:
@@ -66,7 +69,7 @@ class TestText2TextCompiles(unittest.TestCase):
         model = _FakeCausalLM(context)
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
              mock.patch(f"{self.SERVE}.cortexgrid.model_config",
-                        return_value=config or {}), \
+                        return_value={"compile": "true", **(config or {})}), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
@@ -118,6 +121,13 @@ class TestText2TextCompiles(unittest.TestCase):
         self.assertFalse(self.deployment._compiled)
         self.assertIsNone(model.generation_config.cache_implementation)
         self.assertIsNone(model.generation_config.max_cache_len)
+
+    def test_stays_eager_unless_the_model_card_asks(self):
+        model = self.build(config={"compile": "false"})
+
+        self.assertFalse(self.deployment._compiled)
+        self.assertIsNone(model.generation_config.cache_implementation)
+        self.assertIsNone(model.generation_config.compile_config)
 
 
 class TestText2TextThinks(unittest.TestCase):

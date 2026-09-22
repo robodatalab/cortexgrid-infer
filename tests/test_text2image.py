@@ -14,6 +14,9 @@ from cortexgrid_infer.serve_apps.text2image import Text2Image
 class TestText2ImageForTheImporter(unittest.TestCase):
     HF_ID = "black-forest-labs/FLUX.2-klein-base-4B"
 
+    def test_the_model_card_serves_eager_unless_told_otherwise(self):
+        self.assertEqual(Text2Image.config(), {"compile": "false"})
+
     def test_client_speaks_the_deployed_app(self):
         model = Text2Image.client("http://h/r/F/S/R", self.HF_ID)
         self.assertIsInstance(model, ServedGeneratingModel)
@@ -80,11 +83,13 @@ class TestText2ImageCompiles(unittest.TestCase):
 
     SERVE = "cortexgrid_infer.serve_apps.text2image"
 
-    def build(self, device: str = "cuda") -> _FakePipeline:
+    def build(self, device: str = "cuda", compile: str = "true") -> _FakePipeline:
         pipe = _FakePipeline()
         pipeline_class = mock.Mock()
         pipeline_class.from_pretrained.return_value = pipe
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
+             mock.patch(f"{self.SERVE}.cortexgrid.model_config",
+                        return_value={"compile": compile}), \
              mock.patch(f"{self.SERVE}._pipeline_class", return_value=pipeline_class), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device(device)):
             self.deployment = Text2Image("family", "suffix", "imported")
@@ -98,6 +103,12 @@ class TestText2ImageCompiles(unittest.TestCase):
 
     def test_stays_eager_off_cuda(self):
         pipe = self.build(device="mps")
+
+        self.assertEqual(self.deployment._compiled, [])
+        self.assertIsNone(pipe.transformer.compiled_with)
+
+    def test_stays_eager_unless_the_model_card_asks(self):
+        pipe = self.build(compile="false")
 
         self.assertEqual(self.deployment._compiled, [])
         self.assertIsNone(pipe.transformer.compiled_with)

@@ -30,6 +30,12 @@ _GIB = float(1 << 30)
 
 ENABLE_THINKING_PARAM = "enable_thinking"
 
+# Whether a replica runs its model through `torch.compile` (see
+# `cortexgrid_infer.compiling`). Off unless the model card says "true": compiled
+# serving pays a warm-up per input shape, which is worth it only where traffic
+# repeats those shapes.
+COMPILE_PARAM = "compile"
+
 # Weights are only part of what a replica holds. The multiplier covers CUDA
 # context, activations and fragmentation; the floor covers the KV cache of a
 # long context, which does not scale with model size the way activations do.
@@ -98,7 +104,7 @@ class LocalModel:
 
     @classmethod
     def config(cls) -> dict[str, str]:
-        return {}
+        return {COMPILE_PARAM: "false"}
 
     @classmethod
     def client(cls, url: str, name: str) -> DeployedModel:

@@ -117,7 +117,7 @@ class TestTheServeAppDecides(unittest.TestCase):
         self.assertEqual(
             HuggingFaceImporter("org/repo", _ThinkingApp).config(), {"enable_thinking": "true"}
         )
-        self.assertEqual(HuggingFaceImporter("org/repo", _FakeApp).config(), {})
+        self.assertEqual(HuggingFaceImporter("org/repo", _FakeApp).config(), {"compile": "false"})
 
 
 class TestScratchDirectory(unittest.TestCase):

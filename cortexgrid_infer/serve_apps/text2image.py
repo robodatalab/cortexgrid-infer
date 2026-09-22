@@ -29,7 +29,7 @@ import torch
 from cortexgrid_infer import compiling
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
-from cortexgrid_infer.serve_apps.base import LocalModel
+from cortexgrid_infer.serve_apps.base import COMPILE_PARAM, LocalModel
 
 
 _app = FastAPI()
@@ -95,8 +95,12 @@ class Text2Image(LocalModel):
             vae.enable_tiling()
         self._pipe = pipe
         # A denoising schedule is a loop of identically shaped forwards: capture once, replay.
-        self._compiled = compiling.compile_pipeline(
-            pipe, self._device, compiling.Mode.GRAPHED
+        settings = cortexgrid.model_config(family, suffix, run_name)
+        requested = settings.get(COMPILE_PARAM, "false") == "true"
+        self._compiled = (
+            compiling.compile_pipeline(pipe, self._device, compiling.Mode.GRAPHED)
+            if requested
+            else []
         )
 
     @_app.post("/generate")

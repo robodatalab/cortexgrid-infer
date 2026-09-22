@@ -14,6 +14,7 @@ from unittest import mock
 from cortexgrid import serve
 import numpy as np
 from PIL import Image
+import torch
 
 from cortexgrid_infer.core import GeneratedMesh
 from cortexgrid_infer.protocols.meshing import ServedMeshingModel
@@ -75,11 +76,21 @@ class _TriangleDeployment(Image2Mesh):
         return TRIANGLE
 
 
+class _CompilingTriangleDeployment(_TriangleDeployment):
+    """The triangle model, compiling what it loaded when asked to."""
+
+    compiled_on: Any = None
+
+    def compile(self, device: Any) -> None:
+        self.compiled_on = device
+
+
 class TestImage2Mesh(unittest.TestCase):
     SERVE = "cortexgrid_infer.serve_apps.image2mesh"
 
     def setUp(self):
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/weights"), \
+             mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value={}), \
              mock.patch(f"{self.SERVE}.detect_device", return_value="cpu"):
             self.deployment = _TriangleDeployment("family", "suffix", "imported")
 
@@ -110,7 +121,8 @@ class TestImage2Mesh(unittest.TestCase):
 
 class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
     async def test_round_trips_a_mesh_through_the_protocol(self):
-        with mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.load_model", return_value="/w"):
+        with mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.load_model", return_value="/w"), \
+             mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.model_config", return_value={}):
             deployment = _TriangleDeployment("family", "suffix", "imported")
         model = ServedMeshingModel(url="http://h/r/Tri/base/R", model_id="org/Tri")
         payload: dict[str, Any] = {}
@@ -132,7 +144,50 @@ class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deployment.asked[1], {"resolution": 32})
 
 
+class TestImage2MeshCompiles(unittest.TestCase):
+    SERVE = "cortexgrid_infer.serve_apps.image2mesh"
+
+    def build(self, card: dict[str, str], device: Any = torch.device("cuda"),
+              app: type[Image2Mesh] = _CompilingTriangleDeployment) -> Any:
+        with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/weights"), \
+             mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value=card), \
+             mock.patch(f"{self.SERVE}.detect_device", return_value=device):
+            return app("family", "suffix", "imported")
+
+    def test_hands_the_model_its_device_to_compile_on_when_the_card_asks(self):
+        deployment = self.build({"compile": "true"})
+
+        self.assertTrue(deployment.compiled)
+        self.assertEqual(deployment.compiled_on, torch.device("cuda"))
+
+    def test_compiles_what_was_loaded(self):
+        # The hook has the model to compile only once `load` has built it.
+        deployment = self.build({"compile": "true"})
+
+        self.assertEqual(deployment.loaded, (Path("/weights"), torch.device("cuda")))
+
+    def test_stays_eager_unless_the_model_card_asks(self):
+        deployment = self.build({})
+
+        self.assertFalse(deployment.compiled)
+        self.assertIsNone(deployment.compiled_on)
+
+    def test_stays_eager_off_cuda(self):
+        deployment = self.build({"compile": "true"}, device=torch.device("cpu"))
+
+        self.assertFalse(deployment.compiled)
+        self.assertIsNone(deployment.compiled_on)
+
+    def test_a_model_that_compiles_nothing_still_serves(self):
+        deployment = self.build({"compile": "true"}, app=_TriangleDeployment)
+
+        self.assertEqual(deployment.loaded, (Path("/weights"), torch.device("cuda")))
+
+
 class TestImage2MeshForTheImporter(unittest.TestCase):
+    def test_the_model_card_serves_eager_unless_told_otherwise(self):
+        self.assertEqual(_TriangleDeployment.config(), {"compile": "false"})
+
     def test_client_speaks_the_task_s_protocol(self):
         model = _TriangleDeployment.client("http://h/r/Tri/small/R", "org/Tri-small")
         self.assertIsInstance(model, ServedMeshingModel)
