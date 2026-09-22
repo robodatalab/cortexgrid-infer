@@ -115,7 +115,7 @@ class RewritingModel(DeployedModel):
     request/response."""
 
     @abc.abstractmethod
-    async def rewrite(self, text: str, **kwargs: Any) -> str: ...
+    async def rewrite(self, text: str, max_new_tokens: int = 512, **kwargs: Any) -> str: ...
 
 
 async def complete(
@@ -153,6 +153,11 @@ async def mesh(deployed_model: MeshingModel, image: bytes, **kwargs: Any) -> Gen
     return await deployed_model.mesh(image, **kwargs)
 
 
-async def rewrite(deployed_model: RewritingModel, text: str, **kwargs: Any) -> str:
+async def rewrite(
+    deployed_model: RewritingModel,
+    text: str,
+    max_new_tokens: int = 512,
+    **kwargs: Any,
+) -> str:
     """Single rewriting request to the deployed model."""
-    return await deployed_model.rewrite(text, **kwargs)
+    return await deployed_model.rewrite(text, max_new_tokens=max_new_tokens, **kwargs)

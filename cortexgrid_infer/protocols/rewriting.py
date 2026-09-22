@@ -3,7 +3,9 @@
 A rewriting serve app answers `POST /rewrite`: the request carries the text to
 rewrite under `text`, plus whatever generation options the model takes
 (`max_new_tokens`, `num_beams`, say) as further fields. The reply carries the
-rewritten text under `text`.
+rewritten text under `text`. A request without `max_new_tokens` takes the app's
+default: left to transformers, it would be 20 tokens, cutting all but the
+shortest text.
 
 Rewriting is one text in, one text out - correcting grammar, paraphrasing,
 summarising, translating - with no conversation, tools or streaming, which is
@@ -32,10 +34,11 @@ class ServedRewritingModel(RewritingModel):
     def name(self) -> str:
         return self.model_id
 
-    async def rewrite(self, text: str, **generation_options: Any) -> str:
+    async def rewrite(
+        self, text: str, max_new_tokens: int = 512, **generation_options: Any
+    ) -> str:
+        body = {"text": text, "max_new_tokens": max_new_tokens, **generation_options}
         async with httpx.AsyncClient(timeout=None) as client:
-            response = await client.post(
-                f"{self.url}/rewrite", json={"text": text, **generation_options}
-            )
+            response = await client.post(f"{self.url}/rewrite", json=body)
             response.raise_for_status()
             return response.json()["text"]

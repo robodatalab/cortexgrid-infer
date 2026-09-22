@@ -24,6 +24,10 @@ from cortexgrid_infer.serve_apps.base import LocalModel
 
 _app = FastAPI()
 
+# Output budget for a request that names none: T5's training context, and
+# generation stops at the end-of-sequence token well before it for most text.
+DEFAULT_MAX_NEW_TOKENS = 512
+
 
 @serve.ingress(_app)
 class TextRewriter(LocalModel):
@@ -42,7 +46,9 @@ class TextRewriter(LocalModel):
 
     @_app.post("/rewrite")
     async def rewrite(self, body: dict[str, Any]) -> dict[str, str]:
-        generation_options = {key: value for key, value in body.items() if key != "text"}
+        generation_options = {"max_new_tokens": DEFAULT_MAX_NEW_TOKENS} | {
+            key: value for key, value in body.items() if key != "text"
+        }
         inputs = self._tokenizer(body["text"], return_tensors="pt").to(self._device)
         output = self._model.generate(**inputs, **generation_options)
         return {"text": self._tokenizer.decode(output[0], skip_special_tokens=True)}

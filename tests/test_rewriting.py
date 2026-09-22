@@ -98,29 +98,42 @@ class TestTextRewriterRewrites(unittest.TestCase):
             {"input_ids": [[1, 2, 3]], "max_new_tokens": 128, "do_sample": False},
         )
 
+    def test_budgets_512_new_tokens_when_the_request_names_none(self):
+        deployment, _, model = _deployed_rewriter()
+
+        asyncio.run(deployment.rewrite({"text": "gec: She go home."}))
+
+        self.assertEqual(model.generate_arguments["max_new_tokens"], 512)
+
+
+def _served_by(deployment: TextRewriter, posted: dict[str, Any]) -> Any:
+    """Patch the client's HTTP calls through to `deployment`, recording them in `posted`."""
+
+    class _FakeAsyncClientServedByTextRewriter:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self) -> "_FakeAsyncClientServedByTextRewriter":
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+        async def post(self, url: str, json: dict[str, Any]) -> _FakeResponse:
+            posted.update(url=url, json=json)
+            return _FakeResponse(await deployment.rewrite(dict(json)))
+
+    return mock.patch("cortexgrid_infer.protocols.rewriting.httpx.AsyncClient",
+                      _FakeAsyncClientServedByTextRewriter)
+
 
 class TestServedRewritingModel(unittest.IsolatedAsyncioTestCase):
     async def test_round_trips_a_rewrite_through_the_route(self):
         deployment, _, model = _deployed_rewriter()
         posted: dict[str, Any] = {}
 
-        class _FakeAsyncClientServedByTextRewriter:
-            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
-                pass
-
-            async def __aenter__(self) -> "_FakeAsyncClientServedByTextRewriter":
-                return self
-
-            async def __aexit__(self, *args: Any) -> None:
-                pass
-
-            async def post(self, url: str, json: dict[str, Any]) -> _FakeResponse:
-                posted.update(url=url, json=json)
-                return _FakeResponse(await deployment.rewrite(dict(json)))
-
         client = TextRewriter.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
-        with mock.patch("cortexgrid_infer.protocols.rewriting.httpx.AsyncClient",
-                        _FakeAsyncClientServedByTextRewriter):
+        with _served_by(deployment, posted):
             rewritten = await client.rewrite("gec: She go home.", max_new_tokens=128)
 
         self.assertIsInstance(client, ServedRewritingModel)
@@ -128,6 +141,17 @@ class TestServedRewritingModel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rewritten, "She goes home.")
         self.assertEqual(posted["url"], "http://h/r/Unbabel/gec-t5_small/R/rewrite")
         self.assertEqual(model.generate_arguments["max_new_tokens"], 128)
+
+    async def test_asks_for_512_new_tokens_unless_told_otherwise(self):
+        deployment, _, model = _deployed_rewriter()
+        posted: dict[str, Any] = {}
+
+        client = TextRewriter.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
+        with _served_by(deployment, posted):
+            await client.rewrite("gec: She go home.")
+
+        self.assertEqual(posted["json"]["max_new_tokens"], 512)
+        self.assertEqual(model.generate_arguments["max_new_tokens"], 512)
 
 
 if __name__ == "__main__":
