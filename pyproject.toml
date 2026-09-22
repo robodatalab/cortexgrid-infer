@@ -1,6 +1,6 @@
 [project]
 name = "cortexgrid-infer"
-version = "0.3.5"
+version = "0.3.6"
 description = "Serve apps per task (text-to-text, text-to-image, image-to-mesh) and importers per source (HuggingFace) for running models on cortexgrid"
 readme = "README.md"
 license = "Apache-2.0"
@@ -15,7 +15,9 @@ dependencies = [
     # 0.3.4: jobs return results (remote -> JobFuture), register_model for a
     # model that stages no weights, model_config, and deploy_model skipping a
     # redundant PUT - which is why this library has no reuse guard of its own.
-    "cortexgrid>=0.3.4",
+    # 0.3.12: DeploymentKey - a serve-app is constructed with its deployment's
+    # key and reads that deployment's config with model_config(key).
+    "cortexgrid>=0.3.12",
     "torch>=2.0.0",
     # 4.47: CompileConfig, which the completion serve app hands to `generate`
     # alongside a static cache so transformers compiles the decode step itself.
