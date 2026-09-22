@@ -22,6 +22,9 @@ dependencies = [
     "transformers>=4.47.0",
     "huggingface_hub>=0.20.0",
     "anthropic>=0.40.0",
+    # models.gemini. The unified Google Gen AI SDK, not the deprecated
+    # google-generativeai.
+    "google-genai>=1.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.27.0",
     # The serve-apps run on the cluster's FastAPI, which Ray 2.58's Serve

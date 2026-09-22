@@ -36,6 +36,8 @@ A model is two things, and the library keeps them apart:
 | `Text2Image` | text (and image) to image | any diffusers pipeline | `ServedGeneratingModel` (`generate`) |
 | `Image2Mesh` — a base: subclass it with the model's `load` and `make_mesh` | image to mesh | the model the subclass loads, behind the task's `POST /mesh` | `ServedMeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
 | `AnthropicText2Text` | text to text | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
+| `GeminiText2Text` | text to text | the Gemini API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
+| `GeminiText2Image` | text to image | the Gemini API, forwarded from the cluster | `ServedGeneratingModel` (`generate`) |
 
 | Importer | Source |
 |---|---|
@@ -263,6 +265,42 @@ included. From there it deploys and streams exactly like a cluster-served model:
 reports tool calls as structured blocks rather than as generated text, so the
 serve app re-encodes them into the text form the client parses.
 
+### Gemini
+
+A Gemini model registers exactly like an Anthropic one, with the serve app for
+its task — `GeminiText2Text` or `GeminiText2Image`. The model id passed to
+`Hosted` is the Gemini model name the deployment calls:
+
+```python
+cortexgrid.set_secret("GEMINI_API_KEY", "AIza...")   # once
+
+entry = mg.Hosted("gemini-2.5-pro", mg.GeminiText2Text)   # or "gemini-2.5-flash", ...
+cortexgrid.register_model(
+    entry.serve_app,
+    family=entry.family, suffix=entry.suffix,
+    requirements=entry.requirements(), config=entry.config(),
+)
+```
+
+Everything said above for Anthropic holds: `config` carries the model name and
+the name of the secret (`api_key_secret="..."` to use another), both editable on
+the model card; a replica needs no hardware; and `entry.client(deployment.url)`
+is a `ServedCompletingModel`, with Gemini's function calls re-encoded into the
+text form the client parses.
+
+`GeminiText2Image` answers the same `/generate` route as `Text2Image`, so its
+client is a `ServedGeneratingModel`:
+
+```python
+entry = mg.Hosted("gemini-2.5-flash-image", mg.GeminiText2Image)
+...
+picture = await mg.generate(entry.client(deployment.url), "a fox in the snow", size=2048)
+```
+
+It takes a prompt only, and makes a square picture. `size` picks Gemini's size
+tier (up to 1K, 2K or 4K) and `seed` is passed on; `steps` and `guidance` are
+diffusion settings with no Gemini counterpart, and come back as `None`.
+
 ## API
 
 | | |
@@ -273,6 +311,7 @@ serve app re-encodes them into the text form the client parses.
 | `ModelEntry` | Base of both: `model_id`, `family`, `suffix`, `serve_app`, `requirements()`, `config()`, `client(url)`. |
 | `Text2Text`, `Text2Image`, `Image2Mesh` | Serve apps that run weights (`LocalModel`s). |
 | `AnthropicText2Text` | Serve app that forwards to the Anthropic API (a `HostedModel`). |
+| `GeminiText2Text`, `GeminiText2Image` | Serve apps that forward to the Gemini API (`HostedModel`s sharing the `GeminiModel` base). |
 | `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `client(url, name)`. |
 | `HostedModel` | Base of the serve apps that forward: `config(model_id, **settings)`, `requirements()`, `client(url, name)`. |
 | `Weights(params=None, file_bytes=0)` | What an importer reads about the weights, handed to the serve app to size a replica. |
