@@ -7,7 +7,7 @@ from unittest import mock
 
 import torch
 
-from cortexgrid_infer.protocols.seq2seq import ServedSeq2SeqModel
+from cortexgrid_infer.protocols.rewriting import ServedRewritingModel
 from cortexgrid_infer.serve_apps.seq2seq import Seq2Seq
 
 SERVE = "cortexgrid_infer.serve_apps.seq2seq"
@@ -76,11 +76,11 @@ class TestSeq2SeqLoads(unittest.TestCase):
         model.to.assert_called_once_with(torch.device("cpu"))
 
 
-class TestSeq2SeqGenerates(unittest.TestCase):
+class TestSeq2SeqRewrites(unittest.TestCase):
     def test_reads_the_text_as_sent_and_answers_with_the_decoded_generation(self):
         deployment, tokenizer, _ = _deployed_seq2seq()
 
-        reply = asyncio.run(deployment.generate({"text": "gec: She go home."}))
+        reply = asyncio.run(deployment.rewrite({"text": "gec: She go home."}))
 
         self.assertEqual(tokenizer.tokenized, ("gec: She go home.", "pt"))
         self.assertEqual(tokenizer.decoded, ([7, 8, 9], True))
@@ -89,7 +89,7 @@ class TestSeq2SeqGenerates(unittest.TestCase):
     def test_hands_generate_every_option_the_request_carried(self):
         deployment, _, model = _deployed_seq2seq()
 
-        asyncio.run(deployment.generate(
+        asyncio.run(deployment.rewrite(
             {"text": "gec: She go home.", "max_new_tokens": 128, "do_sample": False}
         ))
 
@@ -99,8 +99,8 @@ class TestSeq2SeqGenerates(unittest.TestCase):
         )
 
 
-class TestServedSeq2SeqModel(unittest.IsolatedAsyncioTestCase):
-    async def test_round_trips_a_generation_through_the_route(self):
+class TestServedRewritingModel(unittest.IsolatedAsyncioTestCase):
+    async def test_round_trips_a_rewrite_through_the_route(self):
         deployment, _, model = _deployed_seq2seq()
         posted: dict[str, Any] = {}
 
@@ -116,17 +116,17 @@ class TestServedSeq2SeqModel(unittest.IsolatedAsyncioTestCase):
 
             async def post(self, url: str, json: dict[str, Any]) -> _FakeResponse:
                 posted.update(url=url, json=json)
-                return _FakeResponse(await deployment.generate(dict(json)))
+                return _FakeResponse(await deployment.rewrite(dict(json)))
 
         client = Seq2Seq.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
-        with mock.patch("cortexgrid_infer.protocols.seq2seq.httpx.AsyncClient",
+        with mock.patch("cortexgrid_infer.protocols.rewriting.httpx.AsyncClient",
                         _FakeAsyncClientServedBySeq2Seq):
-            generated = await client.generate("gec: She go home.", max_new_tokens=128)
+            rewritten = await client.rewrite("gec: She go home.", max_new_tokens=128)
 
-        self.assertIsInstance(client, ServedSeq2SeqModel)
+        self.assertIsInstance(client, ServedRewritingModel)
         self.assertEqual(client.name, "Unbabel/gec-t5_small")
-        self.assertEqual(generated, "She goes home.")
-        self.assertEqual(posted["url"], "http://h/r/Unbabel/gec-t5_small/R/generate")
+        self.assertEqual(rewritten, "She goes home.")
+        self.assertEqual(posted["url"], "http://h/r/Unbabel/gec-t5_small/R/rewrite")
         self.assertEqual(model.generate_arguments["max_new_tokens"], 128)
 
 

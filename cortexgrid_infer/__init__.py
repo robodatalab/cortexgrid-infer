@@ -38,17 +38,20 @@ from cortexgrid_infer.core import (
     GeneratingModel,
     MeshingModel,
     Message,
+    RewritingModel,
     Tool,
     ToolCall,
     ToolSpec,
     complete,
     generate,
     mesh,
+    rewrite,
 )
 from cortexgrid_infer.protocols import (
     ServedCompletingModel,
     ServedGeneratingModel,
     ServedMeshingModel,
+    ServedRewritingModel,
 )
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.serve_apps import (
@@ -73,6 +76,7 @@ __all__ = [
     "GeneratedMesh",
     "GeneratingModel",
     "MeshingModel",
+    "RewritingModel",
     "Message",
     "Tool",
     "ToolCall",
@@ -80,11 +84,13 @@ __all__ = [
     "complete",
     "generate",
     "mesh",
+    "rewrite",
     "ModelDeployFailed",
     "detect_device",
     "ServedCompletingModel",
     "ServedGeneratingModel",
     "ServedMeshingModel",
+    "ServedRewritingModel",
     "LocalModel",
     "HostedModel",
     "Weights",
