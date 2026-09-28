@@ -23,8 +23,9 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 
 from cortexgrid_infer.core import Message, ToolSpec
-from cortexgrid_infer.protocols.completion import ServedCompletingModel, encode_tool_call
+from cortexgrid_infer.protocols.completion import ServedCompletingModel
 from cortexgrid_infer.serve_apps.base import HostedModel
+from cortexgrid_infer.serve_apps.streamed_completion import StreamedCompletionWriter
 
 _app = FastAPI()
 
@@ -162,19 +163,23 @@ class AnthropicText2Text(HostedModel):
             create_kwargs["tools"] = tools
 
         async def stream() -> AsyncIterator[bytes]:
+            writer = StreamedCompletionWriter()
             async with self._client.messages.stream(**create_kwargs) as events:
                 async for event in events:
                     if (
                         event.type == "content_block_delta"
                         and event.delta.type == "text_delta"
                     ):
-                        yield event.delta.text.encode("utf-8")
+                        line = writer.read_content(event.delta.text)
+                        yield line
 
                     elif event.type == "content_block_stop":
                         block = events.current_message_snapshot.content[event.index]
                         if block.type == "tool_use":
-                            yield encode_tool_call(
-                                block.name, dict(block.input)
-                            ).encode("utf-8")
+                            arguments = dict(block.input)
+                            line = writer.read_tool_call(block.name, arguments, block.id)
+                            yield line
+            for line in writer.finish():
+                yield line
 
-        return StreamingResponse(stream(), media_type="text/plain")
+        return StreamingResponse(stream(), media_type="application/x-ndjson")

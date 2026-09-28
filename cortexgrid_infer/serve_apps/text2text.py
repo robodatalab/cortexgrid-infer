@@ -36,6 +36,7 @@ from cortexgrid_infer.serve_apps.base import (
     ENABLE_THINKING_PARAM,
     LocalModel,
 )
+from cortexgrid_infer.serve_apps.streamed_completion import StreamedCompletionWriter
 
 
 log = logging.getLogger(__name__)
@@ -265,13 +266,16 @@ class Text2Text(LocalModel):
         loop.run_in_executor(None, generate)
 
         async def stream() -> AsyncIterator[bytes]:
+            writer = StreamedCompletionWriter()
             while True:
                 text = await queue.get()
                 if text is None:
                     break
-                if text:
-                    yield text.encode("utf-8")
+                for line in writer.read(text):
+                    yield line
             if error:
                 raise error[0]
+            for line in writer.finish():
+                yield line
 
-        return StreamingResponse(stream(), media_type="text/plain")
+        return StreamingResponse(stream(), media_type="application/x-ndjson")

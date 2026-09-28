@@ -37,6 +37,27 @@ class CompletionChunk:
     def has_tool_calls(self) -> bool:
         return bool(self.tool_calls)
 
+    @classmethod
+    def from_wire(
+        cls, answered: dict[str, Any], tools_by_name: dict[str, Callable[..., Any]]
+    ) -> CompletionChunk:
+        tool_calls = []
+        for called in answered["tool_calls"]:
+            tool = tools_by_name.get(called["name"])
+            if tool is None:
+                continue
+            bound = partial(tool, **called["arguments"])
+            tool_call = ToolCall(
+                id=called["id"], name=called["name"], arguments=called["arguments"], _func=bound
+            )
+            tool_calls.append(tool_call)
+        return cls(
+            content=answered["content"],
+            thinking=answered["thinking"],
+            tool_calls=tool_calls,
+            finish_reason=answered["finish_reason"],
+        )
+
 
 Message = dict[str, Any]
 ToolSpec = dict[str, Any]
