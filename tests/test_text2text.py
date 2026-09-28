@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import cortexgrid
+import json
 import torch
 import unittest
 from unittest import mock
@@ -290,7 +291,7 @@ class TestText2TextLoads(unittest.TestCase):
                 self.assertEqual(self.load(card).call_args.kwargs["torch_dtype"], expected_dtype)
 
 
-class TestText2TextReadsTheModel(unittest.TestCase):
+class TestText2TextReadsTheModel(unittest.IsolatedAsyncioTestCase):
     SERVE = "cortexgrid_infer.serve_apps.text2text"
 
     def build(self, ids_of_each_text: dict[str, list[int]]) -> Text2Text:
@@ -327,3 +328,43 @@ class TestText2TextReadsTheModel(unittest.TestCase):
         for name, sequence, expected_tokens in cases:
             with self.subTest(name):
                 self.assertEqual(allowed(0, torch.tensor(sequence)), expected_tokens)
+
+    async def test_hands_back_the_last_hidden_state_after_each_continuation_of_each_part(self):
+        cases = [
+            (
+                "one_part",
+                ["It rained.\n"],
+                [["wet", "home"]],
+                [[[-0.1351, -1.6366, -1.0490, -0.4350], [1.0009, 0.1602, -1.4286, 0.9532]]],
+            ),
+            (
+                "the_second_part_reads_on_from_the_first",
+                ["It rained.\n", "Ann left.\n"],
+                [["home"], ["home"]],
+                [[[1.0009, 0.1602, -1.4286, 0.9532]], [[1.0284, 0.1110, -1.4578, 0.8831]]],
+            ),
+            (
+                "a_part_without_continuations",
+                ["It rained.\n", "Ann left.\n"],
+                [[], ["home"]],
+                [[], [[1.0284, 0.1110, -1.4578, 0.8831]]],
+            ),
+            (
+                "no_parts",
+                [],
+                [],
+                [],
+            ),
+        ]
+        deployment = self.build(
+            {"It rained.\n": [5, 6, 7], "Ann left.\n": [8, 9], "wet": [10, 11], "home": [12]}
+        )
+        for name, parts, continuations_of_each_part, expected in cases:
+            with self.subTest(name):
+                response = await deployment.last_hidden_states(
+                    {"parts": parts, "continuations_of_each_part": continuations_of_each_part}
+                )
+                lines = [line async for line in response.body_iterator]
+                answered = [json.loads(line)["last_hidden_states"] for line in lines]
+
+                torch.testing.assert_close(answered, expected, atol=1e-4, rtol=0)

@@ -153,3 +153,72 @@ class TestServedCompletingModelReadsTheModel(unittest.IsolatedAsyncioTestCase):
                     json.loads(server.call_args.args[0].content),
                     {"messages": messages, "continuations": continuations},
                 )
+
+    async def test_hands_back_the_last_hidden_states_after_each_part(self):
+        cases = [
+            (
+                "two_parts",
+                ["It rained.\n", "Ann left.\n"],
+                [["Ann | is | wet", "Ann | is | home"], ["Ann | is | home"]],
+                [
+                    b'{"last_hidden_states": [[0.5, -1.0], [0.25, 2.0]]}\n',
+                    b'{"last_hidden_states": [[-0.75, 1.5]]}\n',
+                ],
+                [[[0.5, -1.0], [0.25, 2.0]], [[-0.75, 1.5]]],
+            ),
+            (
+                "a_part_without_continuations",
+                ["It rained.\n"],
+                [[]],
+                [b'{"last_hidden_states": []}\n'],
+                [[]],
+            ),
+            (
+                "no_parts",
+                [],
+                [],
+                [],
+                [],
+            ),
+        ]
+        for name, parts, continuations_of_each_part, lines, expected in cases:
+            with self.subTest(name):
+                server = _served(lines)
+                model = ServedCompletingModel("http://h/r/F/S/R", "m")
+                with mock.patch.object(
+                    completion.httpx,
+                    "AsyncClient",
+                    functools.partial(httpx.AsyncClient, transport=httpx.MockTransport(server)),
+                ):
+                    result = [
+                        last_hidden_states
+                        async for last_hidden_states in model.last_hidden_states(
+                            parts, continuations_of_each_part
+                        )
+                    ]
+
+                self.assertEqual(result, expected)
+                self.assertEqual(
+                    str(server.call_args.args[0].url), "http://h/r/F/S/R/last_hidden_states"
+                )
+                self.assertEqual(
+                    json.loads(server.call_args.args[0].content),
+                    {"parts": parts, "continuations_of_each_part": continuations_of_each_part},
+                )
+
+    async def test_a_model_that_hides_its_hidden_states_refuses(self):
+        server = mock.Mock(return_value=httpx.Response(501))
+        model = ServedCompletingModel("http://h/r/F/S/R", "claude-sonnet-5")
+
+        with mock.patch.object(
+            completion.httpx,
+            "AsyncClient",
+            functools.partial(httpx.AsyncClient, transport=httpx.MockTransport(server)),
+        ):
+            with self.assertRaises(httpx.HTTPStatusError):
+                [
+                    last_hidden_states
+                    async for last_hidden_states in model.last_hidden_states(
+                        ["It rained.\n"], [["Ann | is | wet"]]
+                    )
+                ]

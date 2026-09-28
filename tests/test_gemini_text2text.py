@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 import cortexgrid
+from fastapi import HTTPException
 from google.genai import types
 
 from cortexgrid_infer.protocols.completion import ServedCompletingModel
@@ -343,3 +344,23 @@ class TestToolConversion(unittest.TestCase):
             ],
         )
         types.Tool.model_validate(result[0])
+
+
+class TestGeminiText2TextHiddenStates(unittest.IsolatedAsyncioTestCase):
+    @mock.patch(f"{BASE}.genai")
+    @mock.patch(f"{BASE}.cortexgrid")
+    async def test_refuses_to_give_out_hidden_states(
+        self, mock_cortexgrid: mock.Mock, _mock_genai: mock.Mock
+    ):
+        mock_cortexgrid.model_config.return_value = {
+            "model": "gemini-2.5-pro",
+            "api_key_secret": "GEMINI_API_KEY",
+        }
+        deployment = GeminiText2Text(cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"))
+
+        with self.assertRaises(HTTPException) as caught:
+            await deployment.last_hidden_states(
+                {"parts": ["It rained.\n"], "continuations_of_each_part": [["Ann | is | wet"]]}
+            )
+
+        self.assertEqual(caught.exception.status_code, 501)
