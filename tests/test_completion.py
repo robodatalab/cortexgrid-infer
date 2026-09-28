@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import functools
+import json
 import unittest
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest import mock
 
+import httpx
+
+from cortexgrid_infer.protocols import completion
 from cortexgrid_infer.protocols.completion import (
     ServedCompletingModel,
     encode_thinking,
@@ -204,3 +209,79 @@ class TestServedCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("".join(c.thinking for c in out), "I should add.")
         self.assertEqual([c.tool_calls[0]() for c in out if c.has_tool_calls], [5])
+
+
+class TestServedCompletingModelReadsTheModel(unittest.IsolatedAsyncioTestCase):
+    async def test_asks_for_the_loglikelihood_of_every_continuation(self):
+        cases = [
+            (
+                "two_answers",
+                [{"role": "user", "content": "Yes or no?"}],
+                ["yes", "no"],
+                {"loglikelihoods": [-0.1, -2.3]},
+                [-0.1, -2.3],
+            ),
+            (
+                "one_long_continuation",
+                [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "Name a colour."}],
+                ["dark blue"],
+                {"loglikelihoods": [-4.75]},
+                [-4.75],
+            ),
+            (
+                "no_continuations",
+                [{"role": "user", "content": "Anything?"}],
+                [],
+                {"loglikelihoods": []},
+                [],
+            ),
+        ]
+        for name, messages, continuations, answered, expected in cases:
+            with self.subTest(name):
+                server = mock.Mock(return_value=httpx.Response(200, json=answered))
+                with mock.patch.object(
+                    completion.httpx,
+                    "AsyncClient",
+                    functools.partial(httpx.AsyncClient, transport=httpx.MockTransport(server)),
+                ):
+                    result = await ServedCompletingModel("http://h/r/F/S/R", "m").loglikelihoods(
+                        messages, continuations
+                    )
+
+                self.assertEqual(result, expected)
+                self.assertEqual(str(server.call_args.args[0].url), "http://h/r/F/S/R/loglikelihoods")
+                self.assertEqual(
+                    json.loads(server.call_args.args[0].content),
+                    {"messages": messages, "continuations": continuations},
+                )
+
+    async def test_asks_for_the_hidden_state_after_every_probe(self):
+        cases = [
+            (
+                "raw_vectors_from_the_last_layer",
+                {},
+                {"text": "The story.", "probes": ["a", "b"], "layer": -1},
+            ),
+            (
+                "a_chosen_layer",
+                {"layer": 12},
+                {"text": "The story.", "probes": ["a", "b"], "layer": 12},
+            ),
+        ]
+        for name, options, expected_body in cases:
+            with self.subTest(name):
+                server = mock.Mock(
+                    return_value=httpx.Response(200, json={"vectors": [[1.0, 2.0], [3.0, 4.0]]})
+                )
+                with mock.patch.object(
+                    completion.httpx,
+                    "AsyncClient",
+                    functools.partial(httpx.AsyncClient, transport=httpx.MockTransport(server)),
+                ):
+                    result = await ServedCompletingModel("http://h/r/F/S/R", "m").hidden_states(
+                        "The story.", ["a", "b"], **options
+                    )
+
+                self.assertEqual(result, [[1.0, 2.0], [3.0, 4.0]])
+                self.assertEqual(str(server.call_args.args[0].url), "http://h/r/F/S/R/hidden_states")
+                self.assertEqual(json.loads(server.call_args.args[0].content), expected_body)
