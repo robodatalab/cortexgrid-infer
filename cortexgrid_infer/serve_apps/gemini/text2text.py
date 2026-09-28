@@ -12,17 +12,14 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from cortexgrid import serve
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from cortexgrid_infer.core import Message, ToolSpec
-from cortexgrid_infer.protocols.completion import (
-    ServedCompletingModel,
-    encode_thinking,
-    encode_tool_call,
-)
+from cortexgrid_infer.protocols.completion import ServedCompletingModel
 from cortexgrid_infer.serve_apps.base import ENABLE_THINKING_PARAM
 from cortexgrid_infer.serve_apps.gemini.base import DEFAULT_API_KEY_SECRET, GeminiModel
+from cortexgrid_infer.serve_apps.streamed_completion import StreamedCompletionWriter
 
 _app = FastAPI()
 
@@ -150,6 +147,7 @@ class GeminiText2Text(GeminiModel):
             generate_config["tools"] = tools
 
         async def stream() -> AsyncIterator[bytes]:
+            writer = StreamedCompletionWriter()
             chunks = await self._client.aio.models.generate_content_stream(
                 model=self._model, contents=contents, config=generate_config
             )
@@ -158,14 +156,27 @@ class GeminiText2Text(GeminiModel):
                     continue
                 for part in chunk.candidates[0].content.parts or []:
                     if part.function_call:
-                        yield encode_tool_call(
-                            part.function_call.name, dict(part.function_call.args or {})
-                        ).encode("utf-8")
+                        arguments = dict(part.function_call.args or {})
+                        line = writer.read_tool_call(
+                            part.function_call.name, arguments, part.function_call.id
+                        )
+                        yield line
 
                     elif part.text and part.thought:
-                        yield encode_thinking(part.text).encode("utf-8")
+                        line = writer.read_thinking(part.text)
+                        yield line
 
                     elif part.text:
-                        yield part.text.encode("utf-8")
+                        line = writer.read_content(part.text)
+                        yield line
+            for line in writer.finish():
+                yield line
 
-        return StreamingResponse(stream(), media_type="text/plain")
+        return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+    @_app.post("/last_hidden_states")
+    async def last_hidden_states(self, body: dict[str, Any]) -> None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Gemini does not expose its models' hidden states",
+        )

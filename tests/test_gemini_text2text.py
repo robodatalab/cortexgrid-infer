@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import unittest
 from unittest import mock
 
 import cortexgrid
+from fastapi import HTTPException
 from google.genai import types
 
-from cortexgrid_infer.protocols.completion import (
-    ServedCompletingModel,
-    encode_thinking,
-    encode_tool_call,
-)
+from cortexgrid_infer.protocols.completion import ServedCompletingModel
+from cortexgrid_infer.serve_apps import streamed_completion
+from cortexgrid_infer.serve_apps.streamed_completion import completion_chunk
 from cortexgrid_infer.registry import Hosted
 from cortexgrid_infer.serve_apps.gemini.text2text import (
     SKIP_THOUGHT_SIGNATURE,
@@ -92,16 +92,22 @@ class TestComplete(unittest.TestCase):
     def test_streams_text_and_re_encodes_function_calls(self):
         call = types.FunctionCall(name="add", args={"a": 1, "b": 2})
 
-        text, _generate = self._complete(
-            [
-                _chunk(types.Part(text="let me ")),
-                _chunk(types.Part(text="check")),
-                _chunk(types.Part(function_call=call)),
-            ],
-            {"messages": [{"role": "user", "content": "1+2?"}]},
-        )
+        with mock.patch.object(streamed_completion, "_tool_call_id_counter", itertools.count()):
+            text, _generate = self._complete(
+                [
+                    _chunk(types.Part(text="let me ")),
+                    _chunk(types.Part(text="check")),
+                    _chunk(types.Part(function_call=call)),
+                ],
+                {"messages": [{"role": "user", "content": "1+2?"}]},
+            )
 
-        self.assertEqual(text, "let me check" + encode_tool_call("add", {"a": 1, "b": 2}))
+        expected = [
+            completion_chunk(content="let me "),
+            completion_chunk(content="check"),
+            completion_chunk(tool_calls=[{"id": "call_0", "name": "add", "arguments": {"a": 1, "b": 2}}]),
+        ]
+        self.assertEqual(text, b"".join(expected).decode("utf-8"))
 
     def test_returns_thoughts_as_thinking_and_leaves_out_empty_chunks(self):
         text, _generate = self._complete(
@@ -113,7 +119,12 @@ class TestComplete(unittest.TestCase):
             {"messages": [{"role": "user", "content": "2+2?"}]},
         )
 
-        self.assertEqual(text, encode_thinking("pondering") + "4")
+        expected = [
+            completion_chunk(thinking="pondering"),
+            completion_chunk(content="4"),
+            completion_chunk(finish_reason="stop"),
+        ]
+        self.assertEqual(text, b"".join(expected).decode("utf-8"))
 
     def test_a_model_card_with_thinking_off_asks_for_no_thinking(self):
         _text, generate = self._complete(
@@ -333,3 +344,23 @@ class TestToolConversion(unittest.TestCase):
             ],
         )
         types.Tool.model_validate(result[0])
+
+
+class TestGeminiText2TextHiddenStates(unittest.IsolatedAsyncioTestCase):
+    @mock.patch(f"{BASE}.genai")
+    @mock.patch(f"{BASE}.cortexgrid")
+    async def test_refuses_to_give_out_hidden_states(
+        self, mock_cortexgrid: mock.Mock, _mock_genai: mock.Mock
+    ):
+        mock_cortexgrid.model_config.return_value = {
+            "model": "gemini-2.5-pro",
+            "api_key_secret": "GEMINI_API_KEY",
+        }
+        deployment = GeminiText2Text(cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"))
+
+        with self.assertRaises(HTTPException) as caught:
+            await deployment.last_hidden_states(
+                {"parts": ["It rained.\n"], "continuations_of_each_part": [["Ann | is | wet"]]}
+            )
+
+        self.assertEqual(caught.exception.status_code, 501)

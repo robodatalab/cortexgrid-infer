@@ -10,8 +10,10 @@ its tokens are forwarded untouched.
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from threading import Thread
 from typing import Any
 
@@ -22,7 +24,9 @@ from fastapi.responses import StreamingResponse
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    Cache,
     CompileConfig,
+    PreTrainedModel,
     TextIteratorStreamer,
 )
 import torch
@@ -35,6 +39,7 @@ from cortexgrid_infer.serve_apps.base import (
     ENABLE_THINKING_PARAM,
     LocalModel,
 )
+from cortexgrid_infer.serve_apps.streamed_completion import StreamedCompletionWriter
 
 
 log = logging.getLogger(__name__)
@@ -51,6 +56,9 @@ _app = FastAPI()
 MAX_TOTAL_TOKENS_PARAM = "max_total_tokens"
 DEFAULT_MAX_TOTAL_TOKENS = 4096
 
+DTYPE_PARAM = "dtype"
+DEFAULT_DTYPE = "float16"
+
 _RESERVED_BODY_KEYS = {
     "messages",
     "tools",
@@ -59,7 +67,53 @@ _RESERVED_BODY_KEYS = {
     "top_p",
     "top_k",
     "repetition_penalty",
+    "choices",
 }
+
+
+def allowed_next_tokens(
+    choices: list[list[int]], generated: list[int], end_of_text: int
+) -> list[int]:
+    matching = [choice for choice in choices if choice[: len(generated)] == generated]
+    continuing = {choice[len(generated)] for choice in matching if len(choice) > len(generated)}
+    finished = any(choice == generated for choice in matching)
+    allowed = sorted(continuing | {end_of_text}) if finished else sorted(continuing)
+    return allowed or [end_of_text]
+
+
+def continuation_loglikelihood(
+    model: PreTrainedModel, prompt_ids: list[int], continuation_ids: list[int]
+) -> float:
+    read = torch.tensor([prompt_ids + continuation_ids], device=model.device)
+    with torch.inference_mode():
+        outputs = model(input_ids=read, logits_to_keep=len(continuation_ids) + 1)
+    predicting_the_continuation = outputs.logits[0, :-1].float()
+    log_probabilities = torch.log_softmax(predicting_the_continuation, dim=-1)
+    positions = torch.arange(len(continuation_ids), device=log_probabilities.device)
+    continuation = torch.tensor(continuation_ids, device=log_probabilities.device)
+    return float(log_probabilities[positions, continuation].sum())
+
+
+def read_further(model: PreTrainedModel, read: Cache | None, ids: list[int]) -> Cache:
+    unread = torch.tensor([ids], device=model.device)
+    with torch.inference_mode():
+        outputs = model(input_ids=unread, past_key_values=read, use_cache=True, logits_to_keep=1)
+    return outputs.past_key_values
+
+
+def last_hidden_state_after(model: PreTrainedModel, read: Cache, ids: list[int]) -> torch.Tensor:
+    read_for_the_continuation = copy.deepcopy(read)
+    continuation = torch.tensor([ids], device=model.device)
+    with torch.inference_mode():
+        outputs = model(
+            input_ids=continuation,
+            past_key_values=read_for_the_continuation,
+            use_cache=True,
+            output_hidden_states=True,
+            logits_to_keep=1,
+        )
+    last_layer = outputs.hidden_states[-1]
+    return last_layer[0, -1].float()
 
 
 @serve.ingress(_app)
@@ -76,15 +130,15 @@ class Text2Text(LocalModel):
         path = cortexgrid.load_model(
             deployment.family, deployment.suffix, deployment.run_name
         )
+        settings = cortexgrid.model_config(deployment)
         self._device = detect_device()
         self._tokenizer = AutoTokenizer.from_pretrained(path)
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
         self._model = AutoModelForCausalLM.from_pretrained(
-            str(path), torch_dtype=torch.float16
+            str(path), torch_dtype=getattr(torch, settings.get(DTYPE_PARAM, DEFAULT_DTYPE))
         )
         self._model.to(self._device)  # type: ignore
-        settings = cortexgrid.model_config(deployment)
         context = getattr(
             self._model.config, "max_position_embeddings", DEFAULT_MAX_TOTAL_TOKENS
         )
@@ -127,6 +181,82 @@ class Text2Text(LocalModel):
             inputs[key] = value[..., -limit:]
         return inputs
 
+    def _prompt_ids(self, messages: list[dict[str, Any]]) -> list[int]:
+        prompt = self._tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=self._enable_thinking,
+        )
+        return self._tokenizer(prompt)["input_ids"]
+
+    def _continuation_ids(self, text: str) -> list[int]:
+        return self._tokenizer(text, add_special_tokens=False)["input_ids"]
+
+    def _only_the_choices(
+        self, choices: list[str], prompt_length: int
+    ) -> Callable[[int, torch.Tensor], list[int]]:
+        choice_ids = [self._continuation_ids(choice) for choice in choices]
+        end_of_text = self._tokenizer.eos_token_id
+
+        def allowed(_batch: int, sequence: torch.Tensor) -> list[int]:
+            generated = sequence[prompt_length:].tolist()
+            return allowed_next_tokens(choice_ids, generated, end_of_text)
+
+        return allowed
+
+    def _loglikelihoods(
+        self, messages: list[dict[str, Any]], continuations: list[str]
+    ) -> list[float]:
+        prompt_ids = self._prompt_ids(messages)
+        continuation_ids = [self._continuation_ids(continuation) for continuation in continuations]
+        return [
+            continuation_loglikelihood(self._model, prompt_ids, ids) for ids in continuation_ids
+        ]
+
+    @_app.post("/loglikelihoods")
+    async def loglikelihoods(self, body: dict[str, Any]) -> dict[str, list[float]]:
+        loop = asyncio.get_running_loop()
+        loglikelihoods = await loop.run_in_executor(
+            None, self._loglikelihoods, body["messages"], body["continuations"]
+        )
+        return {"loglikelihoods": loglikelihoods}
+
+    def _read_part(
+        self, read: Cache | None, part: str, continuations: list[str]
+    ) -> tuple[Cache, list[list[float]]]:
+        tokenized = self._tokenizer(part, add_special_tokens=read is None)
+        part_ids = tokenized["input_ids"]
+        read = read_further(self._model, read, part_ids)
+        continuation_ids = [self._continuation_ids(continuation) for continuation in continuations]
+        last_hidden_states = [
+            last_hidden_state_after(self._model, read, ids) for ids in continuation_ids
+        ]
+        answered = [hidden_state.tolist() for hidden_state in last_hidden_states]
+        return read, answered
+
+    async def _last_hidden_states_of_each_part(
+        self, parts: list[str], continuations_of_each_part: list[list[str]]
+    ) -> AsyncIterator[bytes]:
+        loop = asyncio.get_running_loop()
+        read: Cache | None = None
+        for part, continuations in zip(parts, continuations_of_each_part):
+            read, last_hidden_states = await loop.run_in_executor(
+                None, self._read_part, read, part, continuations
+            )
+            answered = json.dumps({"last_hidden_states": last_hidden_states})
+            line = f"{answered}\n".encode("utf-8")
+            yield line
+
+    @_app.post("/last_hidden_states")
+    async def last_hidden_states(self, body: dict[str, Any]) -> StreamingResponse:
+        last_hidden_states_of_each_part = self._last_hidden_states_of_each_part(
+            body["parts"], body["continuations_of_each_part"]
+        )
+        return StreamingResponse(
+            last_hidden_states_of_each_part, media_type="application/x-ndjson"
+        )
+
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:
         messages = body["messages"]
@@ -138,6 +268,7 @@ class Text2Text(LocalModel):
         top_p = body.get("top_p", 0.9)
         top_k = body.get("top_k", 50)
         repetition_penalty = body.get("repetition_penalty", 1.0)
+        choices = body.get("choices")
         extra = {k: v for k, v in body.items() if k not in _RESERVED_BODY_KEYS}
 
         prompt = self._tokenizer.apply_chat_template(
@@ -151,6 +282,9 @@ class Text2Text(LocalModel):
             self._tokenizer(prompt, return_tensors="pt"),
             self._max_total_tokens - max_new_tokens,
         ).to(self._model.device)
+        if choices:
+            prompt_length = inputs["input_ids"].shape[-1]
+            extra["prefix_allowed_tokens_fn"] = self._only_the_choices(choices, prompt_length)
 
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         error: list[BaseException] = []
@@ -192,13 +326,16 @@ class Text2Text(LocalModel):
         loop.run_in_executor(None, generate)
 
         async def stream() -> AsyncIterator[bytes]:
+            writer = StreamedCompletionWriter()
             while True:
                 text = await queue.get()
                 if text is None:
                     break
-                if text:
-                    yield text.encode("utf-8")
+                for line in writer.read(text):
+                    yield line
             if error:
                 raise error[0]
+            for line in writer.finish():
+                yield line
 
-        return StreamingResponse(stream(), media_type="text/plain")
+        return StreamingResponse(stream(), media_type="application/x-ndjson")
