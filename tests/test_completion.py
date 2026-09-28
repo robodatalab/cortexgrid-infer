@@ -254,34 +254,3 @@ class TestServedCompletingModelReadsTheModel(unittest.IsolatedAsyncioTestCase):
                     json.loads(server.call_args.args[0].content),
                     {"messages": messages, "continuations": continuations},
                 )
-
-    async def test_asks_for_the_hidden_state_after_every_probe(self):
-        cases = [
-            (
-                "raw_vectors_from_the_last_layer",
-                {},
-                {"text": "The story.", "probes": ["a", "b"], "layer": -1},
-            ),
-            (
-                "a_chosen_layer",
-                {"layer": 12},
-                {"text": "The story.", "probes": ["a", "b"], "layer": 12},
-            ),
-        ]
-        for name, options, expected_body in cases:
-            with self.subTest(name):
-                server = mock.Mock(
-                    return_value=httpx.Response(200, json={"vectors": [[1.0, 2.0], [3.0, 4.0]]})
-                )
-                with mock.patch.object(
-                    completion.httpx,
-                    "AsyncClient",
-                    functools.partial(httpx.AsyncClient, transport=httpx.MockTransport(server)),
-                ):
-                    result = await ServedCompletingModel("http://h/r/F/S/R", "m").hidden_states(
-                        "The story.", ["a", "b"], **options
-                    )
-
-                self.assertEqual(result, [[1.0, 2.0], [3.0, 4.0]])
-                self.assertEqual(str(server.call_args.args[0].url), "http://h/r/F/S/R/hidden_states")
-                self.assertEqual(json.loads(server.call_args.args[0].content), expected_body)

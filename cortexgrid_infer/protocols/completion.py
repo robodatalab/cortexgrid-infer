@@ -134,15 +134,6 @@ class ServedCompletingModel(CompletingModel):
         response.raise_for_status()
         return response.json()["loglikelihoods"]
 
-    async def hidden_states(
-        self, text: str, probes: list[str], layer: int = -1
-    ) -> list[list[float]]:
-        body = {"text": text, "probes": probes, "layer": layer}
-        async with httpx.AsyncClient(timeout=None) as client:
-            response = await client.post(f"{self.url}/hidden_states", json=body)
-        response.raise_for_status()
-        return response.json()["vectors"]
-
     async def complete(
         self,
         messages: list[Message],

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
-
 import cortexgrid
 import torch
 import unittest
@@ -13,13 +10,9 @@ from transformers import Qwen3Config, Qwen3ForCausalLM
 
 from cortexgrid_infer.protocols.completion import ServedCompletingModel
 from cortexgrid_infer.serve_apps.text2text import (
-    PrefixCache,
     Text2Text,
     allowed_next_tokens,
     continuation_loglikelihood,
-    hidden_state_after,
-    scaled_RoPE,
-    shared_length,
 )
 
 
@@ -84,8 +77,6 @@ class TestText2TextCompiles(unittest.TestCase):
              mock.patch(f"{self.SERVE}.cortexgrid.model_config",
                         return_value={"compile": "true", **(config or {})}), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.AutoConfig.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.PrefixCache"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device(device)):
@@ -152,8 +143,6 @@ class TestText2TextThinks(unittest.TestCase):
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
              mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value=card), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.AutoConfig.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.PrefixCache"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=_FakeCausalLM()), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cpu")):
@@ -177,8 +166,6 @@ class TestPromptTruncation(unittest.TestCase):
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
              mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value={}), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.AutoConfig.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.PrefixCache"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=model), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cuda")):
@@ -217,22 +204,6 @@ class TestPromptTruncation(unittest.TestCase):
         self.assertIn("20", logged.output[0])
 
 
-class TestSharedLength(unittest.TestCase):
-    def test_counts_the_tokens_both_sequences_start_with(self):
-        cases = [
-            ("identical", [1, 2, 3], [1, 2, 3], 3),
-            ("the_second_goes_on", [1, 2, 3], [1, 2, 3, 4, 5], 3),
-            ("the_second_stops_early", [1, 2, 3, 4], [1, 2], 2),
-            ("they_part_in_the_middle", [1, 2, 3, 4], [1, 2, 9, 4], 2),
-            ("they_part_at_once", [1, 2, 3], [7, 2, 3], 0),
-            ("the_first_is_empty", [], [1, 2], 0),
-            ("both_are_empty", [], [], 0),
-        ]
-        for name, first, second, expected_length in cases:
-            with self.subTest(name):
-                self.assertEqual(shared_length(first, second), expected_length)
-
-
 class TestAllowedNextTokens(unittest.TestCase):
     def test_allows_only_what_continues_a_choice(self):
         cases = [
@@ -249,7 +220,7 @@ class TestAllowedNextTokens(unittest.TestCase):
                 self.assertEqual(allowed_next_tokens(choices, generated, 99), expected_tokens)
 
 
-class TestPrefixCache(unittest.TestCase):
+class TestReadingTheModel(unittest.TestCase):
     def setUp(self) -> None:
         torch.manual_seed(0)
         self.model = Qwen3ForCausalLM(
@@ -265,56 +236,17 @@ class TestPrefixCache(unittest.TestCase):
             )
         ).eval()
 
-    def test_holds_exactly_the_last_prefix_it_read(self):
-        cases = [
-            ("one_prefix", [[1, 2, 3]], 3),
-            ("a_longer_prefix_after", [[1, 2, 3], [1, 2, 3, 4, 5]], 5),
-            ("a_shorter_prefix_after", [[1, 2, 3, 4], [1, 2]], 2),
-            ("a_different_prefix_after", [[1, 2, 3], [7, 8]], 2),
-            ("the_same_prefix_twice", [[1, 2, 3], [1, 2, 3]], 3),
-            ("a_prefix_parting_in_the_middle", [[1, 2, 3, 4], [1, 2, 9, 9, 9]], 5),
-            ("nothing", [[]], 0),
-        ]
-        for name, prefixes, expected_length in cases:
-            with self.subTest(name):
-                prefix_cache = PrefixCache(self.model)
-
-                for prefix in prefixes:
-                    prefix_cache.read(prefix)
-
-                self.assertEqual(prefix_cache.length, expected_length)
-
-    def test_reading_past_the_prefix_leaves_the_prefix(self):
-        cases = [
-            ("one_token", [1, 2, 3], [4], 3),
-            ("several_tokens", [1, 2, 3], [4, 5, 6, 7], 3),
-            ("more_than_the_prefix", [1], [2, 3, 4, 5, 6], 1),
-        ]
-        for name, prefix, past_it, expected_length in cases:
-            with self.subTest(name):
-                prefix_cache = PrefixCache(self.model)
-                prefix_cache.read(prefix)
-
-                prefix_cache.read_past_the_prefix(past_it)
-
-                self.assertEqual(prefix_cache.length, expected_length)
-
     def test_a_continuation_s_loglikelihood_is_the_full_sequence_s(self):
         cases = [
-            ("one_token", [], [1, 2, 3, 4], [5]),
-            ("several_tokens", [], [1, 2, 3, 4], [5, 6, 7]),
-            ("after_reading_the_same_prompt", [[1, 2, 3, 4]], [1, 2, 3, 4], [5, 6]),
-            ("after_reading_a_longer_prompt", [[1, 2, 3, 4, 8, 9]], [1, 2, 3, 4], [5, 6]),
-            ("after_reading_a_different_prompt", [[9, 9, 9]], [1, 2, 3, 4], [5, 6]),
-            ("a_one_token_prompt", [], [1], [5, 6]),
+            ("one_token", [1, 2, 3, 4], [5]),
+            ("several_tokens", [1, 2, 3, 4], [5, 6, 7]),
+            ("a_one_token_prompt", [1], [5, 6]),
+            ("a_continuation_longer_than_the_prompt", [1, 2], [5, 6, 7, 8, 9]),
+            ("a_repeated_token", [3, 3, 3], [3, 3]),
         ]
-        for name, read_before, prompt, continuation in cases:
+        for name, prompt, continuation in cases:
             with self.subTest(name):
-                prefix_cache = PrefixCache(self.model)
-                for earlier in read_before:
-                    prefix_cache.read(earlier)
-
-                loglikelihood = continuation_loglikelihood(prefix_cache, prompt, continuation)
+                loglikelihood = continuation_loglikelihood(self.model, prompt, continuation)
 
                 with torch.inference_mode():
                     logits = self.model(input_ids=torch.tensor([prompt + continuation])).logits[0]
@@ -322,78 +254,6 @@ class TestPrefixCache(unittest.TestCase):
                 predicting = torch.arange(len(prompt) - 1, len(prompt) + len(continuation) - 1)
                 expected = float(log_probabilities[predicting, torch.tensor(continuation)].sum())
                 self.assertAlmostEqual(loglikelihood, expected, places=4)
-
-    def test_a_probe_s_hidden_state_is_the_full_sequence_s(self):
-        cases = [
-            ("the_last_layer", [], [1, 2, 3], [4, 5], -1),
-            ("the_embeddings", [], [1, 2, 3], [4, 5], 0),
-            ("a_middle_layer", [], [1, 2, 3], [4, 5], 1),
-            ("a_one_token_probe", [], [1, 2, 3], [4], -1),
-            ("after_reading_a_shorter_prefix", [[1, 2]], [1, 2, 3], [4, 5], -1),
-            ("after_reading_another_probe", [[1, 2, 3]], [1, 2, 3], [6, 7, 8], -1),
-        ]
-        for name, read_before, prefix, probe, layer in cases:
-            with self.subTest(name):
-                prefix_cache = PrefixCache(self.model)
-                for earlier in read_before:
-                    prefix_cache.read(earlier)
-
-                hidden_state = hidden_state_after(prefix_cache, prefix, probe, layer)
-
-                with torch.inference_mode():
-                    read_in_full = self.model(
-                        input_ids=torch.tensor([prefix + probe]), output_hidden_states=True
-                    ).hidden_states[layer][0, -1]
-                torch.testing.assert_close(hidden_state, read_in_full, atol=1e-4, rtol=1e-4)
-
-
-class TestScaledRoPE(unittest.TestCase):
-    def test_lays_the_scaling_over_the_RoPE_and_stretches_the_context(self):
-        cases = [
-            (
-                "yarn_from_the_original_context",
-                SimpleNamespace(model_type="qwen3", max_position_embeddings=40960, rope_parameters={"rope_type": "default", "rope_theta": 1000000.0}),
-                {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 32768},
-                {"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 4.0, "original_max_position_embeddings": 32768},
-                131072,
-            ),
-            (
-                "linear_from_the_model_s_own_context",
-                SimpleNamespace(model_type="llama", max_position_embeddings=4096, rope_parameters={"rope_type": "default", "rope_theta": 10000.0}),
-                {"rope_type": "linear", "factor": 2.0},
-                {"rope_type": "linear", "rope_theta": 10000.0, "factor": 2.0},
-                8192,
-            ),
-            (
-                "llama3_with_its_own_frequencies",
-                SimpleNamespace(model_type="llama", max_position_embeddings=8192, rope_parameters={"rope_type": "default", "rope_theta": 500000.0}),
-                {"rope_type": "llama3", "factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192},
-                {"rope_type": "llama3", "rope_theta": 500000.0, "factor": 8.0, "low_freq_factor": 1.0, "high_freq_factor": 4.0, "original_max_position_embeddings": 8192},
-                65536,
-            ),
-            (
-                "a_fractional_factor",
-                SimpleNamespace(model_type="qwen3", max_position_embeddings=32768, rope_parameters={"rope_type": "default", "rope_theta": 1000000.0}),
-                {"rope_type": "yarn", "factor": 1.5, "original_max_position_embeddings": 32768},
-                {"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 1.5, "original_max_position_embeddings": 32768},
-                49152,
-            ),
-        ]
-        for name, config, scaling, expected_RoPE, expected_context in cases:
-            with self.subTest(name):
-                scaled = scaled_RoPE(config, scaling)
-
-                self.assertEqual(scaled.rope_parameters, expected_RoPE)
-                self.assertEqual(scaled.max_position_embeddings, expected_context)
-
-    def test_refuses_a_model_without_RoPE(self):
-        cases = [
-            ("no_RoPE_parameters_at_all", SimpleNamespace(model_type="gpt2", max_position_embeddings=1024)),
-            ("RoPE_parameters_left_empty", SimpleNamespace(model_type="gpt2", max_position_embeddings=1024, rope_parameters=None)),
-        ]
-        for name, config in cases:
-            with self.subTest(name), self.assertRaises(ValueError):
-                scaled_RoPE(config, {"rope_type": "linear", "factor": 2.0})
 
 
 class _FakeTokenizer:
@@ -410,43 +270,14 @@ class TestText2TextLoads(unittest.TestCase):
     SERVE = "cortexgrid_infer.serve_apps.text2text"
 
     def load(self, card: dict) -> mock.Mock:
-        config = SimpleNamespace(
-            model_type="qwen3",
-            max_position_embeddings=40960,
-            rope_parameters={"rope_type": "default", "rope_theta": 1000000.0},
-        )
         with mock.patch(f"{self.SERVE}.cortexgrid.load_model", return_value="/w"), \
              mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value=card), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained"), \
-             mock.patch(f"{self.SERVE}.AutoConfig.from_pretrained", return_value=config), \
-             mock.patch(f"{self.SERVE}.PrefixCache"), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained",
                         return_value=_FakeCausalLM()) as loads, \
              mock.patch(f"{self.SERVE}.detect_device", return_value=_Device("cpu")):
             Text2Text(cortexgrid.DeploymentKey("family", "suffix", "imported"))
         return loads
-
-    def test_loads_the_weights_with_the_scaled_RoPE_the_card_asks_for(self):
-        loads = self.load(
-            {
-                "rope_scaling": json.dumps(
-                    {"rope_type": "yarn", "factor": 4.0, "original_max_position_embeddings": 32768}
-                )
-            }
-        )
-
-        loaded_with = loads.call_args.kwargs["config"]
-        self.assertEqual(
-            loaded_with.rope_parameters,
-            {"rope_type": "yarn", "rope_theta": 1000000.0, "factor": 4.0, "original_max_position_embeddings": 32768},
-        )
-        self.assertEqual(loaded_with.max_position_embeddings, 131072)
-
-    def test_loads_the_config_as_it_is_when_the_card_asks_for_no_scaling(self):
-        loaded_with = self.load({}).call_args.kwargs["config"]
-
-        self.assertEqual(loaded_with.rope_parameters, {"rope_type": "default", "rope_theta": 1000000.0})
-        self.assertEqual(loaded_with.max_position_embeddings, 40960)
 
     def test_loads_the_weights_in_the_dtype_the_card_names(self):
         cases = [
@@ -480,7 +311,6 @@ class TestText2TextReadsTheModel(unittest.TestCase):
              mock.patch(f"{self.SERVE}.cortexgrid.model_config", return_value={"enable_thinking": "false"}), \
              mock.patch(f"{self.SERVE}.AutoTokenizer.from_pretrained",
                         return_value=_FakeTokenizer(ids_of_each_text)), \
-             mock.patch(f"{self.SERVE}.AutoConfig.from_pretrained", return_value=model.config), \
              mock.patch(f"{self.SERVE}.AutoModelForCausalLM.from_pretrained", return_value=model), \
              mock.patch(f"{self.SERVE}.detect_device", return_value=torch.device("cpu")):
             return Text2Text(cortexgrid.DeploymentKey("family", "suffix", "imported"))
@@ -497,16 +327,3 @@ class TestText2TextReadsTheModel(unittest.TestCase):
         for name, sequence, expected_tokens in cases:
             with self.subTest(name):
                 self.assertEqual(allowed(0, torch.tensor(sequence)), expected_tokens)
-
-    def test_returns_one_vector_of_the_model_s_width_per_probe(self):
-        cases = [
-            ("two_probes", ["a probe", "another"], [4, 4]),
-            ("one_probe", ["another"], [4]),
-            ("no_probes", [], []),
-        ]
-        deployment = self.build({"The story.": [5, 6, 7], "a probe": [8, 9], "another": [10]})
-        for name, probes, expected_widths in cases:
-            with self.subTest(name):
-                vectors = deployment._hidden_states("The story.", probes, -1)
-
-                self.assertEqual([len(vector) for vector in vectors], expected_widths)

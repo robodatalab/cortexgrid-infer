@@ -10,10 +10,9 @@ its tokens are forwarded untouched.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator, Callable
-from threading import Lock, Thread
+from threading import Thread
 from typing import Any
 
 import cortexgrid
@@ -21,12 +20,9 @@ from cortexgrid import serve
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from transformers import (
-    AutoConfig,
     AutoModelForCausalLM,
     AutoTokenizer,
     CompileConfig,
-    DynamicCache,
-    PretrainedConfig,
     PreTrainedModel,
     TextIteratorStreamer,
 )
@@ -59,8 +55,6 @@ DEFAULT_MAX_TOTAL_TOKENS = 4096
 DTYPE_PARAM = "dtype"
 DEFAULT_DTYPE = "float16"
 
-RoPE_SCALING_PARAM = "rope_scaling"
-
 _RESERVED_BODY_KEYS = {
     "messages",
     "tools",
@@ -73,18 +67,6 @@ _RESERVED_BODY_KEYS = {
 }
 
 
-def scaled_RoPE(config: PretrainedConfig, scaling: dict[str, Any]) -> PretrainedConfig:
-    RoPE_parameters = getattr(config, "rope_parameters", None)
-    if not RoPE_parameters:
-        raise ValueError(f"{config.model_type} has no RoPE to scale with {scaling}")
-    original_context = scaling.get(
-        "original_max_position_embeddings", config.max_position_embeddings
-    )
-    config.rope_parameters = {**RoPE_parameters, **scaling}
-    config.max_position_embeddings = int(original_context * scaling["factor"])
-    return config
-
-
 def allowed_next_tokens(
     choices: list[list[int]], generated: list[int], end_of_text: int
 ) -> list[int]:
@@ -95,70 +77,17 @@ def allowed_next_tokens(
     return allowed or [end_of_text]
 
 
-def shared_length(first: list[int], second: list[int]) -> int:
-    for position, (in_first, in_second) in enumerate(zip(first, second)):
-        if in_first != in_second:
-            return position
-    return min(len(first), len(second))
-
-
-class PrefixCache:
-    def __init__(self, model: PreTrainedModel) -> None:
-        self._model = model
-        self._read_ids: list[int] = []
-        self._cache = DynamicCache(config=model.config)
-
-    @property
-    def length(self) -> int:
-        return self._cache.get_seq_length()
-
-    def read(self, ids: list[int]) -> None:
-        shared = shared_length(self._read_ids, ids)
-        no_longer_read = self._cache.get_seq_length() - shared
-        if no_longer_read:
-            self._cache.crop(-no_longer_read)
-        self._read_ids = list(ids)
-        unread = ids[shared:]
-        if not unread:
-            return
-        with torch.inference_mode():
-            self._model(
-                input_ids=torch.tensor([unread], device=self._model.device),
-                past_key_values=self._cache,
-                use_cache=True,
-                logits_to_keep=1,
-            )
-
-    def read_past_the_prefix(self, ids: list[int]) -> Any:
-        with torch.inference_mode():
-            outputs = self._model(
-                input_ids=torch.tensor([ids], device=self._model.device),
-                past_key_values=self._cache,
-                use_cache=True,
-                output_hidden_states=True,
-            )
-        self._cache.crop(-len(ids))
-        return outputs
-
-
 def continuation_loglikelihood(
-    prefix_cache: PrefixCache, prompt_ids: list[int], continuation_ids: list[int]
+    model: PreTrainedModel, prompt_ids: list[int], continuation_ids: list[int]
 ) -> float:
-    prefix_cache.read(prompt_ids[:-1])
-    predicting_the_continuation = prompt_ids[-1:] + continuation_ids[:-1]
-    outputs = prefix_cache.read_past_the_prefix(predicting_the_continuation)
-    log_probabilities = torch.log_softmax(outputs.logits[0].float(), dim=-1)
+    read = torch.tensor([prompt_ids + continuation_ids], device=model.device)
+    with torch.inference_mode():
+        outputs = model(input_ids=read, logits_to_keep=len(continuation_ids) + 1)
+    predicting_the_continuation = outputs.logits[0, :-1].float()
+    log_probabilities = torch.log_softmax(predicting_the_continuation, dim=-1)
     positions = torch.arange(len(continuation_ids), device=log_probabilities.device)
     continuation = torch.tensor(continuation_ids, device=log_probabilities.device)
     return float(log_probabilities[positions, continuation].sum())
-
-
-def hidden_state_after(
-    prefix_cache: PrefixCache, prefix_ids: list[int], probe_ids: list[int], layer: int
-) -> torch.Tensor:
-    prefix_cache.read(prefix_ids)
-    outputs = prefix_cache.read_past_the_prefix(probe_ids)
-    return outputs.hidden_states[layer][0, -1]
 
 
 @serve.ingress(_app)
@@ -176,21 +105,14 @@ class Text2Text(LocalModel):
             deployment.family, deployment.suffix, deployment.run_name
         )
         settings = cortexgrid.model_config(deployment)
-        config = AutoConfig.from_pretrained(path)
-        if RoPE_SCALING_PARAM in settings:
-            config = scaled_RoPE(config, json.loads(settings[RoPE_SCALING_PARAM]))
         self._device = detect_device()
         self._tokenizer = AutoTokenizer.from_pretrained(path)
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
         self._model = AutoModelForCausalLM.from_pretrained(
-            str(path),
-            config=config,
-            torch_dtype=getattr(torch, settings.get(DTYPE_PARAM, DEFAULT_DTYPE)),
+            str(path), torch_dtype=getattr(torch, settings.get(DTYPE_PARAM, DEFAULT_DTYPE))
         )
         self._model.to(self._device)  # type: ignore
-        self._prefix_cache = PrefixCache(self._model)
-        self._one_read_at_a_time = Lock()
         context = getattr(
             self._model.config, "max_position_embeddings", DEFAULT_MAX_TOTAL_TOKENS
         )
@@ -205,10 +127,10 @@ class Text2Text(LocalModel):
         requested = settings.get(COMPILE_PARAM, "false") == "true"
         self._compiled = requested and compiling.supported(self._device)
         if self._compiled:
-            generation_config = self._model.generation_config
-            generation_config.cache_implementation = "static"
-            generation_config.max_cache_len = self._max_total_tokens
-            generation_config.compile_config = CompileConfig(mode=compiling.Mode.GRAPHED)
+            config = self._model.generation_config
+            config.cache_implementation = "static"
+            config.max_cache_len = self._max_total_tokens
+            config.compile_config = CompileConfig(mode=compiling.Mode.GRAPHED)
 
     def _room_for_the_reply(self, requested: int) -> int:
         """How many tokens a reply may take, leaving the prompt the rest.
@@ -262,21 +184,9 @@ class Text2Text(LocalModel):
     ) -> list[float]:
         prompt_ids = self._prompt_ids(messages)
         continuation_ids = [self._continuation_ids(continuation) for continuation in continuations]
-        with self._one_read_at_a_time:
-            return [
-                continuation_loglikelihood(self._prefix_cache, prompt_ids, ids)
-                for ids in continuation_ids
-            ]
-
-    def _hidden_states(self, text: str, probes: list[str], layer: int) -> list[list[float]]:
-        prefix_ids = self._tokenizer(text)["input_ids"]
-        probe_ids = [self._continuation_ids(probe) for probe in probes]
-        with self._one_read_at_a_time:
-            vectors = [
-                hidden_state_after(self._prefix_cache, prefix_ids, ids, layer).float()
-                for ids in probe_ids
-            ]
-        return [vector.tolist() for vector in vectors]
+        return [
+            continuation_loglikelihood(self._model, prompt_ids, ids) for ids in continuation_ids
+        ]
 
     @_app.post("/loglikelihoods")
     async def loglikelihoods(self, body: dict[str, Any]) -> dict[str, list[float]]:
@@ -285,14 +195,6 @@ class Text2Text(LocalModel):
             None, self._loglikelihoods, body["messages"], body["continuations"]
         )
         return {"loglikelihoods": loglikelihoods}
-
-    @_app.post("/hidden_states")
-    async def hidden_states(self, body: dict[str, Any]) -> dict[str, list[list[float]]]:
-        loop = asyncio.get_running_loop()
-        vectors = await loop.run_in_executor(
-            None, self._hidden_states, body["text"], body["probes"], body.get("layer", -1)
-        )
-        return {"vectors": vectors}
 
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:
