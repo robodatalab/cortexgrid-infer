@@ -80,12 +80,13 @@ class ServedCompletingModel(CompletingModel):
                     yield chunk
 
     async def last_hidden_states(
-        self, text: str, continuations: list[str]
-    ) -> list[list[float]]:
-        body = {"text": text, "continuations": continuations}
+        self, parts: list[str], continuations_of_each_part: list[list[str]]
+    ) -> AsyncIterator[list[list[float]]]:
+        body = {"parts": parts, "continuations_of_each_part": continuations_of_each_part}
         last_hidden_states_url = f"{self.url}/last_hidden_states"
         async with httpx.AsyncClient(timeout=None) as client:
-            response = await client.post(last_hidden_states_url, json=body)
-        response.raise_for_status()
-        answered = response.json()
-        return answered["last_hidden_states"]
+            async with client.stream("POST", last_hidden_states_url, json=body) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    answered = json.loads(line)
+                    yield answered["last_hidden_states"]

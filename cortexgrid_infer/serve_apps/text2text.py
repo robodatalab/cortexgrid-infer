@@ -10,6 +10,8 @@ its tokens are forwarded untouched.
 from __future__ import annotations
 
 import asyncio
+import copy
+import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from threading import Thread
@@ -22,6 +24,7 @@ from fastapi.responses import StreamingResponse
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
+    Cache,
     CompileConfig,
     PreTrainedModel,
     TextIteratorStreamer,
@@ -91,10 +94,24 @@ def continuation_loglikelihood(
     return float(log_probabilities[positions, continuation].sum())
 
 
-def last_hidden_state(model: PreTrainedModel, ids: list[int]) -> torch.Tensor:
-    read = torch.tensor([ids], device=model.device)
+def read_further(model: PreTrainedModel, read: Cache | None, ids: list[int]) -> Cache:
+    unread = torch.tensor([ids], device=model.device)
     with torch.inference_mode():
-        outputs = model(input_ids=read, output_hidden_states=True, logits_to_keep=1)
+        outputs = model(input_ids=unread, past_key_values=read, use_cache=True, logits_to_keep=1)
+    return outputs.past_key_values
+
+
+def last_hidden_state_after(model: PreTrainedModel, read: Cache, ids: list[int]) -> torch.Tensor:
+    read_for_the_continuation = copy.deepcopy(read)
+    continuation = torch.tensor([ids], device=model.device)
+    with torch.inference_mode():
+        outputs = model(
+            input_ids=continuation,
+            past_key_values=read_for_the_continuation,
+            use_cache=True,
+            output_hidden_states=True,
+            logits_to_keep=1,
+        )
     last_layer = outputs.hidden_states[-1]
     return last_layer[0, -1].float()
 
@@ -205,22 +222,40 @@ class Text2Text(LocalModel):
         )
         return {"loglikelihoods": loglikelihoods}
 
-    def _last_hidden_states(self, text: str, continuations: list[str]) -> list[list[float]]:
-        tokenized = self._tokenizer(text)
-        text_ids = tokenized["input_ids"]
+    def _read_part(
+        self, read: Cache | None, part: str, continuations: list[str]
+    ) -> tuple[Cache, list[list[float]]]:
+        tokenized = self._tokenizer(part, add_special_tokens=read is None)
+        part_ids = tokenized["input_ids"]
+        read = read_further(self._model, read, part_ids)
         continuation_ids = [self._continuation_ids(continuation) for continuation in continuations]
         last_hidden_states = [
-            last_hidden_state(self._model, text_ids + ids) for ids in continuation_ids
+            last_hidden_state_after(self._model, read, ids) for ids in continuation_ids
         ]
-        return [hidden_state.tolist() for hidden_state in last_hidden_states]
+        answered = [hidden_state.tolist() for hidden_state in last_hidden_states]
+        return read, answered
+
+    async def _last_hidden_states_of_each_part(
+        self, parts: list[str], continuations_of_each_part: list[list[str]]
+    ) -> AsyncIterator[bytes]:
+        loop = asyncio.get_running_loop()
+        read: Cache | None = None
+        for part, continuations in zip(parts, continuations_of_each_part):
+            read, last_hidden_states = await loop.run_in_executor(
+                None, self._read_part, read, part, continuations
+            )
+            answered = json.dumps({"last_hidden_states": last_hidden_states})
+            line = f"{answered}\n".encode("utf-8")
+            yield line
 
     @_app.post("/last_hidden_states")
-    async def last_hidden_states(self, body: dict[str, Any]) -> dict[str, list[list[float]]]:
-        loop = asyncio.get_running_loop()
-        last_hidden_states = await loop.run_in_executor(
-            None, self._last_hidden_states, body["text"], body["continuations"]
+    async def last_hidden_states(self, body: dict[str, Any]) -> StreamingResponse:
+        last_hidden_states_of_each_part = self._last_hidden_states_of_each_part(
+            body["parts"], body["continuations_of_each_part"]
         )
-        return {"last_hidden_states": last_hidden_states}
+        return StreamingResponse(
+            last_hidden_states_of_each_part, media_type="application/x-ndjson"
+        )
 
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:
