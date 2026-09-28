@@ -19,7 +19,7 @@ from typing import Any
 import cortexgrid
 from anthropic import AsyncAnthropic
 from cortexgrid import serve
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from cortexgrid_infer.core import Message, ToolSpec
@@ -183,3 +183,10 @@ class AnthropicText2Text(HostedModel):
                 yield line
 
         return StreamingResponse(stream(), media_type="application/x-ndjson")
+
+    @_app.post("/last_hidden_states")
+    async def last_hidden_states(self, body: dict[str, Any]) -> None:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Anthropic does not expose its models' hidden states",
+        )

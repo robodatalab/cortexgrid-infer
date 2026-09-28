@@ -78,3 +78,14 @@ class ServedCompletingModel(CompletingModel):
                     answered = json.loads(line)
                     chunk = CompletionChunk.from_wire(answered, tools_by_name)
                     yield chunk
+
+    async def last_hidden_states(
+        self, text: str, continuations: list[str]
+    ) -> list[list[float]]:
+        body = {"text": text, "continuations": continuations}
+        last_hidden_states_url = f"{self.url}/last_hidden_states"
+        async with httpx.AsyncClient(timeout=None) as client:
+            response = await client.post(last_hidden_states_url, json=body)
+        response.raise_for_status()
+        answered = response.json()
+        return answered["last_hidden_states"]

@@ -91,6 +91,14 @@ def continuation_loglikelihood(
     return float(log_probabilities[positions, continuation].sum())
 
 
+def last_hidden_state(model: PreTrainedModel, ids: list[int]) -> torch.Tensor:
+    read = torch.tensor([ids], device=model.device)
+    with torch.inference_mode():
+        outputs = model(input_ids=read, output_hidden_states=True, logits_to_keep=1)
+    last_layer = outputs.hidden_states[-1]
+    return last_layer[0, -1].float()
+
+
 @serve.ingress(_app)
 class Text2Text(LocalModel):
     @classmethod
@@ -196,6 +204,23 @@ class Text2Text(LocalModel):
             None, self._loglikelihoods, body["messages"], body["continuations"]
         )
         return {"loglikelihoods": loglikelihoods}
+
+    def _last_hidden_states(self, text: str, continuations: list[str]) -> list[list[float]]:
+        tokenized = self._tokenizer(text)
+        text_ids = tokenized["input_ids"]
+        continuation_ids = [self._continuation_ids(continuation) for continuation in continuations]
+        last_hidden_states = [
+            last_hidden_state(self._model, text_ids + ids) for ids in continuation_ids
+        ]
+        return [hidden_state.tolist() for hidden_state in last_hidden_states]
+
+    @_app.post("/last_hidden_states")
+    async def last_hidden_states(self, body: dict[str, Any]) -> dict[str, list[list[float]]]:
+        loop = asyncio.get_running_loop()
+        last_hidden_states = await loop.run_in_executor(
+            None, self._last_hidden_states, body["text"], body["continuations"]
+        )
+        return {"last_hidden_states": last_hidden_states}
 
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:
