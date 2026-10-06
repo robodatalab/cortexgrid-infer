@@ -20,11 +20,9 @@ in step with it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import cortexgrid
-
-from cortexgrid_infer.core import DeployedModel
 
 _GIB = float(1 << 30)
 
@@ -107,8 +105,8 @@ class LocalModel:
         return {COMPILE_PARAM: "false"}
 
     @classmethod
-    def client(cls, url: str, name: str) -> DeployedModel:
-        """A client for this app deployed at `url`, serving the model `name`."""
+    def client(cls, deployment: cortexgrid.Deployment[Any]) -> cortexgrid.DeploymentClient:
+        """A client for this app's `deployment`."""
         raise NotImplementedError
 
 
@@ -128,6 +126,6 @@ class HostedModel:
         return cortexgrid.ModelRequirements()
 
     @classmethod
-    def client(cls, url: str, name: str) -> DeployedModel:
-        """A client for this app deployed at `url`, serving the model `name`."""
+    def client(cls, deployment: cortexgrid.Deployment[Any]) -> cortexgrid.DeploymentClient:
+        """A client for this app's `deployment`."""
         raise NotImplementedError

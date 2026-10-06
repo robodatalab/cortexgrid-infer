@@ -57,11 +57,12 @@ need:
 | `.serve_app` | the class cortexgrid bundles and runs on the cluster |
 | `.requirements()` | what one replica needs to be placed and to run |
 | `.config()` | settings the serve app reads at construction, if it needs any |
-| `.client(url)` | a client that speaks the deployed app's routes |
 | `.source` | *(importers only)* a callable that downloads the weights and returns the directory |
 
 One with weights goes through `cortexgrid.import_model`, one without through
-`cortexgrid.register_model`.
+`cortexgrid.register_model`. Once deployed, the `cortexgrid.Deployment` hands back
+the client that speaks the app's routes: `deployment.client()` once the app serves,
+or `deployment.client_async()` at once, with `await model.is_ready()` to ask.
 
 ## Quick start
 
@@ -89,13 +90,11 @@ cortexgrid.remote(
     import_weights, imp, imp.requirements(), num_gpus=0, num_cpus=2
 ).result()
 
-# 2. Deploy — blocks until the Ray Serve app is running.
-deployment = cortexgrid.deploy_model(
-    imp.family, imp.suffix, cortexgrid.IMPORTED, wait=True, timeout=1800
-)
+# 2. Deploy.
+deployment = cortexgrid.deploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED, timeout=1800)
 
-# 3. Inference.
-model = imp.client(deployment.url)
+# 3. Inference — the client blocks until the Ray Serve app is running.
+model = deployment.client()
 
 async def run():
     result = await mg.generate(model, "a red bicycle on a beach at sunrise")
@@ -253,8 +252,7 @@ it is the floor; only quantizing the weights or running fewer forwards moves it.
 `complete` streams `CompletionChunk`s (`.content`, `.thinking`, `.tool_calls`, `.finish_reason`):
 
 ```python
-imp = mg.HuggingFaceImporter("Qwen/Qwen2.5-7B-Instruct", mg.Text2Text)
-model = imp.client(deployment.url)
+model = deployment.client()
 messages = [{"role": "user", "content": "Explain RAG in one sentence."}]
 
 async for chunk in mg.complete(model, messages, max_new_tokens=512, temperature=0.7):
@@ -295,7 +293,7 @@ a re-deploy rather than a re-registration.
 
 A replica asks for no hardware at all, so it is placed on any node, CPU-only
 included. From there it deploys and streams exactly like a cluster-served model:
-`entry.client(deployment.url)` returns the same `ServedCompletingModel`. Anthropic
+`deployment.client()` returns the same `ServedCompletingModel`. Anthropic
 reports tool calls as structured blocks rather than as generated text, so the
 serve app re-encodes them into the text form the client parses.
 
@@ -318,7 +316,7 @@ cortexgrid.register_model(
 
 Everything said above for Anthropic holds: `config` carries the model name and
 the name of the secret (`api_key_secret="..."` to use another), both editable on
-the model card; a replica needs no hardware; and `entry.client(deployment.url)`
+the model card; a replica needs no hardware; and `deployment.client()`
 is a `ServedCompletingModel`, with Gemini's function calls re-encoded into the
 text form the client parses.
 
@@ -328,7 +326,8 @@ client is a `ServedGeneratingModel`:
 ```python
 entry = mg.Hosted("gemini-2.5-flash-image", mg.GeminiText2Image)
 ...
-picture = await mg.generate(entry.client(deployment.url), "a fox in the snow", size=2048)
+model = deployment.client()
+picture = await mg.generate(model, "a fox in the snow", size=2048)
 ```
 
 It takes a prompt only, and makes a square picture. `size` picks Gemini's size
@@ -340,28 +339,28 @@ diffusion settings with no Gemini counterpart, and come back as `None`.
 | | |
 |---|---|
 | `HuggingFaceImporter(hf_id, serve_app, token=None, ignore_patterns=None)` | Importer for a model on the HuggingFace Hub, run by `serve_app`. |
-| `Importer` | Base of the importers: identity, scratch directory, `source`, and `requirements()` / `client(url)` taken from the serve app. A new source implements `download(local_dir)` and `weights()`. |
+| `Importer` | Base of the importers: identity, scratch directory, `source`, and `requirements()` taken from the serve app. A new source implements `download(local_dir)` and `weights()`. |
 | `Hosted(model_id, serve_app, **settings)` | Entry for a model hosted elsewhere; no weights. `settings` are the serve app's `config` arguments. |
-| `ModelEntry` | Base of both: `model_id`, `family`, `suffix`, `serve_app`, `requirements()`, `config()`, `client(url)`. |
+| `ModelEntry` | Base of both: `model_id`, `family`, `suffix`, `serve_app`, `requirements()`, `config()`. |
 | `Text2Text`, `Text2Image`, `TextRewriter`, `Image2Mesh` | Serve apps that run weights (`LocalModel`s). |
 | `AnthropicText2Text` | Serve app that forwards to the Anthropic API (a `HostedModel`). |
 | `GeminiText2Text`, `GeminiText2Image` | Serve apps that forward to the Gemini API (`HostedModel`s sharing the `GeminiModel` base). |
-| `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `config()` (the model card's defaults, `compile: "false"` among them), `client(url, name)`. |
-| `HostedModel` | Base of the serve apps that forward: `config(model_id, **settings)`, `requirements()`, `client(url, name)`. |
+| `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `config()` (the model card's defaults, `compile: "false"` among them), `client(deployment)`. |
+| `HostedModel` | Base of the serve apps that forward: `config(model_id, **settings)`, `requirements()`, `client(deployment)`. |
 | `Weights(params=None, file_bytes=0)` | What an importer reads about the weights, handed to the serve app to size a replica. |
 | `complete(model, messages, tools=None, max_new_tokens=2048, temperature=0.7, **kw)` | Async stream of `CompletionChunk` for a `CompletingModel`. |
 | `generate(model, prompt, *, image=None, **kw) -> GeneratedImage` | One image from a `GeneratingModel`. |
-| `ServedCompletingModel(url, model_id)` | Client for any deployed completion app. |
-| `ServedGeneratingModel(url, model_id)` | Client for any deployed text-to-image app. |
-| `ServedMeshingModel(url, model_id)` | Client for any deployed image-to-mesh app. |
+| `ServedCompletingModel(key, url)` | Client for any deployed completion app. |
+| `ServedGeneratingModel(key, url)` | Client for any deployed text-to-image app. |
+| `ServedMeshingModel(key, url)` | Client for any deployed image-to-mesh app. |
 | `split_model_id(model_id) -> (family, suffix)` | The registry identity an importer derives. |
 | `detect_device()` | The torch device a serve app should load onto. |
 | `compiling.Mode.GRAPHED` / `compiling.Mode.FUSED` | The two modes a serve app chooses between. See [Compilation](#compilation). |
 | `compiling.supported(device)` / `compile_module(module, device, mode)` / `compile_pipeline(pipe, device, mode)` | Whether to compile here, and what a serve app calls to do it. |
 | `ModelDeployFailed` | Re-exported from cortexgrid; subclasses `RuntimeError`. |
 
-Types: `DeployedModel`, `CompletingModel`, `GeneratingModel`, `MeshingModel`,
-`CompletionChunk`, `GeneratedImage`, `GeneratedMesh`, `ToolCall`, `Message`, `Tool`,
+Types: `CompletingModel`, `GeneratingModel`, `MeshingModel`, `RewritingModel` (each
+a `cortexgrid.DeploymentClient`), `CompletionChunk`, `GeneratedImage`, `GeneratedMesh`, `ToolCall`, `Message`, `Tool`,
 `ToolSpec`.
 
 Extending it:

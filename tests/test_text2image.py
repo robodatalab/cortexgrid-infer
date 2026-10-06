@@ -20,10 +20,25 @@ class TestText2ImageForTheImporter(unittest.TestCase):
         self.assertEqual(Text2Image.config(), {"compile": "false"})
 
     def test_client_speaks_the_deployed_app(self):
-        model = Text2Image.client("http://h/r/F/S/R", self.HF_ID)
-        self.assertIsInstance(model, ServedGeneratingModel)
-        self.assertEqual(model.url, "http://h/r/F/S/R")
-        self.assertEqual(model.name, self.HF_ID)
+        deployment = cortexgrid.Deployment(
+            key=cortexgrid.DeploymentKey("F", "S", "R"),
+            config={},
+            url="http://h/r/F/S/R",
+            phase="running",
+            bundle_fingerprint="",
+            replaced_bundle_fingerprint="",
+            experiment_name="",
+            class_import_path="cortexgrid_infer.serve_apps.text2image:Text2Image",
+        )
+
+        model = Text2Image.client(deployment)
+
+        self.assertEqual(
+            model,
+            ServedGeneratingModel(
+                key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
+            ),
+        )
 
     def test_skips_what_the_pipeline_never_loads(self):
         self.assertIn("*.md", Text2Image.ignore_patterns())

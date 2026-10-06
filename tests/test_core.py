@@ -7,6 +7,8 @@ from collections.abc import AsyncIterator
 from functools import partial
 from typing import Any, Sequence
 
+import cortexgrid
+
 from cortexgrid_infer.core import (
     CompletingModel,
     CompletionChunk,
@@ -18,13 +20,6 @@ from cortexgrid_infer.core import (
 
 
 class _StubModel(CompletingModel):
-    def __init__(self, model_id: str, timeout: float | None = None) -> None:
-        self._model_id = model_id
-
-    @property
-    def name(self) -> str:
-        return self._model_id
-
     async def complete(
         self,
         messages: list[Message],
@@ -86,7 +81,7 @@ class TestCompletionChunk(unittest.TestCase):
 
 class TestComplete(unittest.IsolatedAsyncioTestCase):
     async def test_yields_chunks(self):
-        model = _StubModel("test")
+        model = _StubModel(key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R")
         chunks = [c async for c in complete(model, [{"role": "user", "content": "hi"}])]
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0].content, "stub")

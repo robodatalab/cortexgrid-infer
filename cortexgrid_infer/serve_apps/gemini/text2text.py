@@ -11,6 +11,7 @@ import base64
 from collections.abc import AsyncIterator
 from typing import Any
 
+import cortexgrid
 from cortexgrid import serve
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -124,8 +125,8 @@ class GeminiText2Text(GeminiModel):
         }
 
     @classmethod
-    def client(cls, url: str, name: str) -> ServedCompletingModel:
-        return ServedCompletingModel(url=url, model_id=name)
+    def client(cls, deployment: cortexgrid.Deployment[ServedCompletingModel]) -> ServedCompletingModel:
+        return ServedCompletingModel(key=deployment.key, url=deployment.url)
 
     @_app.post("/complete")
     async def complete(self, body: dict[str, Any]) -> StreamingResponse:

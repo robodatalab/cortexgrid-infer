@@ -125,7 +125,9 @@ class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
         with mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.load_model", return_value="/w"), \
              mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.model_config", return_value={}):
             deployment = _TriangleDeployment(cortexgrid.DeploymentKey("family", "suffix", "imported"))
-        model = ServedMeshingModel(url="http://h/r/Tri/base/R", model_id="org/Tri")
+        model = ServedMeshingModel(
+            key=cortexgrid.DeploymentKey("Tri", "base", "R"), url="http://h/r/Tri/base/R"
+        )
         payload: dict[str, Any] = {}
 
         class _Served(_FakeAsyncClient):
@@ -140,7 +142,6 @@ class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
         np.testing.assert_array_equal(made.faces, TRIANGLE.faces)
         np.testing.assert_array_equal(made.colours, TRIANGLE.colours)
         self.assertEqual(made.params["resolution"], 64)
-        self.assertEqual(made.params["model_id"], "org/Tri")
         self.assertEqual(_Served.captured["url"], "http://h/r/Tri/base/R/mesh")
         self.assertEqual(deployment.asked[1], {"resolution": 32})
 
@@ -190,9 +191,26 @@ class TestImage2MeshForTheImporter(unittest.TestCase):
         self.assertEqual(_TriangleDeployment.config(), {"compile": "false"})
 
     def test_client_speaks_the_task_s_protocol(self):
-        model = _TriangleDeployment.client("http://h/r/Tri/small/R", "org/Tri-small")
-        self.assertIsInstance(model, ServedMeshingModel)
-        self.assertEqual((model.url, model.name), ("http://h/r/Tri/small/R", "org/Tri-small"))
+        deployment = cortexgrid.Deployment(
+            key=cortexgrid.DeploymentKey("Tri", "small", "R"),
+            config={},
+            url="http://h/r/Tri/small/R",
+            phase="running",
+            bundle_fingerprint="",
+            replaced_bundle_fingerprint="",
+            experiment_name="",
+            class_import_path="tests.test_meshing:_TriangleDeployment",
+        )
+
+        model = _TriangleDeployment.client(deployment)
+
+        self.assertEqual(
+            model,
+            ServedMeshingModel(
+                key=cortexgrid.DeploymentKey("Tri", "small", "R"),
+                url="http://h/r/Tri/small/R",
+            ),
+        )
 
     def test_asks_for_the_memory_meshing_takes_not_just_the_weights(self):
         needs = _TriangleDeployment.requirements(Weights(params=1_000_000))

@@ -17,7 +17,7 @@ dependencies = [
     # redundant PUT - which is why this library has no reuse guard of its own.
     # 0.3.12: DeploymentKey - a serve-app is constructed with its deployment's
     # key and reads that deployment's config with model_config(key).
-    "cortexgrid>=0.3.12",
+    "cortexgrid>=0.3.16",
     "torch>=2.0.0",
     # 4.47: CompileConfig, which the completion serve app hands to `generate`
     # alongside a static cache so transformers compiles the decode step itself.

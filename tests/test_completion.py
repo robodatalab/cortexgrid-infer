@@ -8,6 +8,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
+import cortexgrid
 import httpx
 
 from cortexgrid_infer.protocols import completion
@@ -54,7 +55,9 @@ class TestServedCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
         for name, lines, tools, expected in cases:
             with self.subTest(name):
                 server = _served(lines)
-                model = ServedCompletingModel(url="http://h/r/F/S/R", model_id="Qwen/Qwen3-8B")
+                model = ServedCompletingModel(
+                    key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
+                )
 
                 with mock.patch.object(
                     completion.httpx,
@@ -82,7 +85,9 @@ class TestServedCompletingModelComplete(unittest.IsolatedAsyncioTestCase):
             return "noon"
 
         server = _served([completion_chunk(finish_reason="stop")])
-        model = ServedCompletingModel(url="http://h:30000/r/F/S/R", model_id="Qwen/Qwen3-8B")
+        model = ServedCompletingModel(
+            key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h:30000/r/F/S/R"
+        )
 
         with mock.patch.object(
             completion.httpx,
@@ -143,9 +148,10 @@ class TestServedCompletingModelReadsTheModel(unittest.IsolatedAsyncioTestCase):
                     "AsyncClient",
                     functools.partial(httpx.AsyncClient, transport=httpx.MockTransport(server)),
                 ):
-                    result = await ServedCompletingModel("http://h/r/F/S/R", "m").loglikelihoods(
-                        messages, continuations
+                    model = ServedCompletingModel(
+                        key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
                     )
+                    result = await model.loglikelihoods(messages, continuations)
 
                 self.assertEqual(result, expected)
                 self.assertEqual(str(server.call_args.args[0].url), "http://h/r/F/S/R/loglikelihoods")
@@ -184,7 +190,9 @@ class TestServedCompletingModelReadsTheModel(unittest.IsolatedAsyncioTestCase):
         for name, parts, continuations_of_each_part, lines, expected in cases:
             with self.subTest(name):
                 server = _served(lines)
-                model = ServedCompletingModel("http://h/r/F/S/R", "m")
+                model = ServedCompletingModel(
+                    key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
+                )
                 with mock.patch.object(
                     completion.httpx,
                     "AsyncClient",
@@ -208,7 +216,9 @@ class TestServedCompletingModelReadsTheModel(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_model_that_hides_its_hidden_states_refuses(self):
         server = mock.Mock(return_value=httpx.Response(501))
-        model = ServedCompletingModel("http://h/r/F/S/R", "claude-sonnet-5")
+        model = ServedCompletingModel(
+            key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
+        )
 
         with mock.patch.object(
             completion.httpx,

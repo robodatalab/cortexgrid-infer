@@ -123,8 +123,8 @@ class Text2Text(LocalModel):
         return {**super().config(), ENABLE_THINKING_PARAM: "true"}
 
     @classmethod
-    def client(cls, url: str, name: str) -> ServedCompletingModel:
-        return ServedCompletingModel(url=url, model_id=name)
+    def client(cls, deployment: cortexgrid.Deployment[ServedCompletingModel]) -> ServedCompletingModel:
+        return ServedCompletingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         path = cortexgrid.load_model(

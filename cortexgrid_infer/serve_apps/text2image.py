@@ -81,8 +81,8 @@ class Text2Image(LocalModel):
         return _DEFAULT_IGNORE + [p.strip() for p in extra.split(",") if p.strip()]
 
     @classmethod
-    def client(cls, url: str, name: str) -> ServedGeneratingModel:
-        return ServedGeneratingModel(url=url, model_id=name)
+    def client(cls, deployment: cortexgrid.Deployment[ServedGeneratingModel]) -> ServedGeneratingModel:
+        return ServedGeneratingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         path = cortexgrid.load_model(deployment.family, deployment.suffix, deployment.run_name)

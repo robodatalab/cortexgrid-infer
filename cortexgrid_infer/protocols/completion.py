@@ -13,7 +13,6 @@ back as `CompletionChunk`s and reassembles the tool calls.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 import json
 from typing import Any, Sequence
 
@@ -22,19 +21,11 @@ import httpx
 from cortexgrid_infer.core import CompletingModel, CompletionChunk, Message, Tool
 from cortexgrid_infer.utils import build_tool_map, normalize_tools
 
-@dataclass
 class ServedCompletingModel(CompletingModel):
     """Client for a completion app cortexgrid has deployed at `url`.
 
     Provider-agnostic: every completion serve app speaks the protocol above, so
-    which model is behind it only shows up in `model_id`."""
-
-    url: str
-    model_id: str
-
-    @property
-    def name(self) -> str:
-        return self.model_id
+    which model is behind it only shows up in its deployment's `key`."""
 
     async def loglikelihoods(
         self, messages: list[Message], continuations: list[str]

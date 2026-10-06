@@ -19,10 +19,25 @@ from cortexgrid_infer.serve_apps.text2text import (
 
 class TestText2TextForTheImporter(unittest.TestCase):
     def test_client_speaks_the_deployed_app(self):
-        model = Text2Text.client("http://h/r/F/S/R", "Qwen/Qwen2-2.5B-Instruct")
-        self.assertIsInstance(model, ServedCompletingModel)
-        self.assertEqual(model.url, "http://h/r/F/S/R")
-        self.assertEqual(model.name, "Qwen/Qwen2-2.5B-Instruct")
+        deployment = cortexgrid.Deployment(
+            key=cortexgrid.DeploymentKey("F", "S", "R"),
+            config={},
+            url="http://h/r/F/S/R",
+            phase="running",
+            bundle_fingerprint="",
+            replaced_bundle_fingerprint="",
+            experiment_name="",
+            class_import_path="cortexgrid_infer.serve_apps.text2text:Text2Text",
+        )
+
+        model = Text2Text.client(deployment)
+
+        self.assertEqual(
+            model,
+            ServedCompletingModel(
+                key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
+            ),
+        )
 
     def test_loads_every_file_the_repo_ships(self):
         # Every file a causal LM repo ships is one `from_pretrained` may read.
