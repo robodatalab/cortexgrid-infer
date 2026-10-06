@@ -45,9 +45,26 @@ class TestHostedGeminiText2Image(unittest.TestCase):
     def test_client_is_the_shared_generating_client(self):
         # The serve app answers the same /generate route as Text2Image, so
         # there is nothing Gemini-specific left on the client side.
-        model = Hosted("gemini-2.5-flash-image", GeminiText2Image).client("http://h")
-        self.assertIsInstance(model, ServedGeneratingModel)
-        self.assertEqual(model.name, "gemini-2.5-flash-image")
+        deployment = cortexgrid.Deployment(
+            key=cortexgrid.DeploymentKey("gemini-2.5-flash", "image", "imported"),
+            config={},
+            url="http://h",
+            phase="running",
+            bundle_fingerprint="",
+            replaced_bundle_fingerprint="",
+            experiment_name="",
+            class_import_path="cortexgrid_infer.serve_apps.gemini.text2image:GeminiText2Image",
+        )
+
+        model = GeminiText2Image.client(deployment)
+
+        self.assertEqual(
+            model,
+            ServedGeneratingModel(
+                key=cortexgrid.DeploymentKey("gemini-2.5-flash", "image", "imported"),
+                url="http://h",
+            ),
+        )
 
     def test_asks_for_no_hardware(self):
         self.assertEqual(

@@ -51,8 +51,8 @@ class Image2Mesh(LocalModel):
     show - querying the model over a whole 3D grid usually does."""
 
     @classmethod
-    def client(cls, url: str, name: str) -> ServedMeshingModel:
-        return ServedMeshingModel(url=url, model_id=name)
+    def client(cls, deployment: cortexgrid.Deployment[ServedMeshingModel]) -> ServedMeshingModel:
+        return ServedMeshingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         self.device = detect_device()

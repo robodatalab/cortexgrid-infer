@@ -7,6 +7,8 @@ import unittest
 from typing import Any
 from unittest import mock
 
+import cortexgrid
+
 from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
 
 
@@ -58,7 +60,7 @@ class TestServedGeneratingModelGenerate(unittest.IsolatedAsyncioTestCase):
             "duration_s": 12.3,
         }
         model = ServedGeneratingModel(
-            url="http://h:30000/r/F/S/R", model_id="bfl/FLUX.2-klein-base-4B"
+            key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h:30000/r/F/S/R"
         )
         with _patch_httpx_client(payload):
             result = await model.generate("a red cube", steps=50, seed=7)
@@ -80,7 +82,9 @@ class TestServedGeneratingModelGenerate(unittest.IsolatedAsyncioTestCase):
             "width": 512,
             "height": 512,
         }
-        model = ServedGeneratingModel(url="http://x/r/f/s/r", model_id="bfl/FLUX.2-klein-base-4B")
+        model = ServedGeneratingModel(
+            key=cortexgrid.DeploymentKey("f", "s", "r"), url="http://x/r/f/s/r"
+        )
         with _patch_httpx_client(payload):
             await model.generate("stylize", image=b"reference-png")
 

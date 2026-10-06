@@ -18,8 +18,8 @@ nothing else, split along the two things a model is:
             family=imp.family, suffix=imp.suffix,
             requirements=imp.requirements(),
         )
-    deployment = cortexgrid.deploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED, wait=True)
-    model = imp.client(deployment.url)
+    deployment = cortexgrid.deploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED)
+    model = deployment.client()
 
 A model hosted elsewhere has no weights and so no importer: its serve app
 forwards to it, and a `Hosted` entry registers it.
@@ -31,7 +31,6 @@ from cortexgrid import ModelDeployFailed
 
 from cortexgrid_infer.core import (
     CompletionChunk,
-    DeployedModel,
     CompletingModel,
     GeneratedImage,
     GeneratedMesh,
@@ -71,7 +70,6 @@ from cortexgrid_infer.importers import HuggingFaceImporter, Importer
 
 __all__ = [
     "CompletionChunk",
-    "DeployedModel",
     "CompletingModel",
     "GeneratedImage",
     "GeneratedMesh",

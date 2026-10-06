@@ -47,8 +47,8 @@ def _bucket(length: int) -> int:
 @serve.ingress(_app)
 class TextRewriter(LocalModel):
     @classmethod
-    def client(cls, url: str, name: str) -> ServedRewritingModel:
-        return ServedRewritingModel(url=url, model_id=name)
+    def client(cls, deployment: cortexgrid.Deployment[ServedRewritingModel]) -> ServedRewritingModel:
+        return ServedRewritingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         path = cortexgrid.load_model(deployment.family, deployment.suffix, deployment.run_name)

@@ -7,8 +7,8 @@ The lifecycle is driven with the cortexgrid SDK directly - `remote`,
 `import_model`, `deploy_model`, `delete_model`. cortexgrid-infer only supplies
 the pieces those calls need: the text-to-text serve app that will run the
 weights, and a HuggingFace importer that fetches them, names them in the
-registry, estimates the hardware one replica needs, and hands back the serve
-app's HTTP client for the deployed app.
+registry, and estimates the hardware one replica needs. The deployment hands
+back the serve app's HTTP client once the app serves.
 
 Requires CORTEXGRID_HEAD_URL (e.g. in the repo-root .env), and HF_TOKEN for gated
 models.
@@ -113,10 +113,10 @@ def main() -> None:
             family=imp.family,
             suffix=imp.suffix,
             run_name=cortexgrid.IMPORTED,
-            wait=True,
         )
 
-        chat(imp.client(deployment.url))
+        model: mg.ServedCompletingModel = deployment.client()
+        chat(model)
     finally:
         print("deleting")
         if deployment is not None:

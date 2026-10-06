@@ -13,6 +13,7 @@ import io
 import time
 from typing import Any
 
+import cortexgrid
 from cortexgrid import serve
 from fastapi import FastAPI, HTTPException
 from google.genai import types
@@ -63,8 +64,8 @@ def no_image_reason(response: types.GenerateContentResponse) -> str:
 @serve.ingress(_app)
 class GeminiText2Image(GeminiModel):
     @classmethod
-    def client(cls, url: str, name: str) -> ServedGeneratingModel:
-        return ServedGeneratingModel(url=url, model_id=name)
+    def client(cls, deployment: cortexgrid.Deployment[ServedGeneratingModel]) -> ServedGeneratingModel:
+        return ServedGeneratingModel(key=deployment.key, url=deployment.url)
 
     @_app.post("/generate")
     async def generate(self, body: dict[str, Any]) -> dict[str, Any]:

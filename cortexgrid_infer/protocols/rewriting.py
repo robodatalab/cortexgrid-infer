@@ -15,7 +15,6 @@ every model of the task whoever made it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -23,16 +22,8 @@ import httpx
 from cortexgrid_infer.core import RewritingModel
 
 
-@dataclass
 class ServedRewritingModel(RewritingModel):
     """The client of any rewriting serve app deployed at `url`."""
-
-    url: str
-    model_id: str
-
-    @property
-    def name(self) -> str:
-        return self.model_id
 
     async def rewrite(
         self, text: str, max_new_tokens: int = 512, **generation_options: Any

@@ -15,7 +15,6 @@ Every such app speaks it through
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -41,16 +40,8 @@ def decode(data: str, kind: tuple[str, int]) -> np.ndarray:
     return np.frombuffer(base64.b64decode(data), dtype=dtype).reshape(-1, columns)
 
 
-@dataclass
 class ServedMeshingModel(MeshingModel):
     """The client of any image-to-mesh serve app deployed at `url`."""
-
-    url: str
-    model_id: str
-
-    @property
-    def name(self) -> str:
-        return self.model_id
 
     async def mesh(self, image: bytes, **options: Any) -> GeneratedMesh:
         body: dict[str, Any] = {"image": base64.b64encode(image).decode("ascii"), **options}
@@ -67,6 +58,5 @@ class ServedMeshingModel(MeshingModel):
             params={
                 **data.get("params", {}),
                 "duration_s": data.get("duration_s"),
-                "model_id": self.model_id,
             },
         )

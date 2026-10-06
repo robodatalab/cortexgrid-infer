@@ -8,6 +8,7 @@ from functools import partial
 from collections.abc import AsyncIterator
 from typing import Any, Callable, Sequence
 
+import cortexgrid
 import numpy as np
 
 
@@ -64,13 +65,7 @@ ToolSpec = dict[str, Any]
 Tool = Callable[..., Any] | ToolSpec
 
 
-class DeployedModel(abc.ABC):
-    @property
-    @abc.abstractmethod
-    def name(self) -> str: ...
-
-
-class CompletingModel(DeployedModel):
+class CompletingModel(cortexgrid.DeploymentClient, abc.ABC):
     @abc.abstractmethod
     def complete(
         self,
@@ -93,7 +88,7 @@ class GeneratedImage:
     params: dict[str, Any] = field(default_factory=dict)
 
 
-class GeneratingModel(DeployedModel):
+class GeneratingModel(cortexgrid.DeploymentClient, abc.ABC):
     """A deployed image model. Unlike completion, generation is a single
     request/response (no token streaming), so `generate` returns one result."""
 
@@ -124,14 +119,14 @@ class GeneratedMesh:
     params: dict[str, Any] = field(default_factory=dict)
 
 
-class MeshingModel(DeployedModel):
+class MeshingModel(cortexgrid.DeploymentClient, abc.ABC):
     """A deployed model that makes a mesh of the object in one picture."""
 
     @abc.abstractmethod
     async def mesh(self, image: bytes, **kwargs: Any) -> GeneratedMesh: ...
 
 
-class RewritingModel(DeployedModel):
+class RewritingModel(cortexgrid.DeploymentClient, abc.ABC):
     """A deployed model that rewrites one text into another - corrects,
     paraphrases, summarises or translates it. Like generation, a single
     request/response."""

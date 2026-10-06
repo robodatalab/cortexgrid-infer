@@ -15,7 +15,6 @@ task whoever made it.
 from __future__ import annotations
 
 import base64
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -23,16 +22,8 @@ import httpx
 from cortexgrid_infer.core import GeneratedImage, GeneratingModel
 
 
-@dataclass
 class ServedGeneratingModel(GeneratingModel):
     """The client of any text-to-image serve app deployed at `url`."""
-
-    url: str
-    model_id: str
-
-    @property
-    def name(self) -> str:
-        return self.model_id
 
     async def generate(
         self,
@@ -69,6 +60,5 @@ class ServedGeneratingModel(GeneratingModel):
                 "guidance": data.get("guidance", guidance),
                 "seed": data.get("seed", seed),
                 "duration_s": data.get("duration_s"),
-                "model_id": self.model_id,
             },
         )

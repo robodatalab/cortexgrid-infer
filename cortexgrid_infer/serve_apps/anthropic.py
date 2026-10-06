@@ -129,8 +129,8 @@ class AnthropicText2Text(HostedModel):
         return {MODEL_PARAM: model_id, API_KEY_SECRET_PARAM: api_key_secret}
 
     @classmethod
-    def client(cls, url: str, name: str) -> ServedCompletingModel:
-        return ServedCompletingModel(url=url, model_id=name)
+    def client(cls, deployment: cortexgrid.Deployment[ServedCompletingModel]) -> ServedCompletingModel:
+        return ServedCompletingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         config = cortexgrid.model_config(deployment)

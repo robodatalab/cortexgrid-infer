@@ -230,12 +230,22 @@ class TestServedRewritingModel(unittest.IsolatedAsyncioTestCase):
         deployment, _, model = _deployed_rewriter()
         posted: dict[str, Any] = {}
 
-        client = TextRewriter.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
+        rewriter_deployment = cortexgrid.Deployment(
+            key=cortexgrid.DeploymentKey("gec", "t5_small", "R"),
+            config={},
+            url="http://h/r/Unbabel/gec-t5_small/R",
+            phase="running",
+            bundle_fingerprint="",
+            replaced_bundle_fingerprint="",
+            experiment_name="",
+            class_import_path="cortexgrid_infer.serve_apps.text_rewriter:TextRewriter",
+        )
+
+        client = TextRewriter.client(rewriter_deployment)
         with _served_by(deployment, posted):
             rewritten = await client.rewrite("gec: She go home.", max_new_tokens=128)
 
         self.assertIsInstance(client, ServedRewritingModel)
-        self.assertEqual(client.name, "Unbabel/gec-t5_small")
         self.assertEqual(rewritten, "She goes home.")
         self.assertEqual(posted["url"], "http://h/r/Unbabel/gec-t5_small/R/rewrite")
         self.assertEqual(model.generate_arguments["max_new_tokens"], 128)
@@ -244,7 +254,18 @@ class TestServedRewritingModel(unittest.IsolatedAsyncioTestCase):
         deployment, _, model = _deployed_rewriter()
         posted: dict[str, Any] = {}
 
-        client = TextRewriter.client("http://h/r/Unbabel/gec-t5_small/R", "Unbabel/gec-t5_small")
+        rewriter_deployment = cortexgrid.Deployment(
+            key=cortexgrid.DeploymentKey("gec", "t5_small", "R"),
+            config={},
+            url="http://h/r/Unbabel/gec-t5_small/R",
+            phase="running",
+            bundle_fingerprint="",
+            replaced_bundle_fingerprint="",
+            experiment_name="",
+            class_import_path="cortexgrid_infer.serve_apps.text_rewriter:TextRewriter",
+        )
+
+        client = TextRewriter.client(rewriter_deployment)
         with _served_by(deployment, posted):
             await client.rewrite("gec: She go home.")
 

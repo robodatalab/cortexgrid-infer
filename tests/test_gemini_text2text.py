@@ -33,9 +33,26 @@ class TestHostedGeminiText2Text(unittest.TestCase):
     def test_client_is_the_shared_completion_client(self):
         # The serve app speaks the same /complete protocol as Text2Text, so
         # there is nothing Gemini-specific left on the client side.
-        model = Hosted("gemini-2.5-pro", GeminiText2Text).client("http://h/r/F/S/R")
-        self.assertIsInstance(model, ServedCompletingModel)
-        self.assertEqual(model.name, "gemini-2.5-pro")
+        deployment = cortexgrid.Deployment(
+            key=cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"),
+            config={},
+            url="http://h/r/F/S/R",
+            phase="running",
+            bundle_fingerprint="",
+            replaced_bundle_fingerprint="",
+            experiment_name="",
+            class_import_path="cortexgrid_infer.serve_apps.gemini.text2text:GeminiText2Text",
+        )
+
+        model = GeminiText2Text.client(deployment)
+
+        self.assertEqual(
+            model,
+            ServedCompletingModel(
+                key=cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"),
+                url="http://h/r/F/S/R",
+            ),
+        )
 
     def test_asks_for_no_hardware(self):
         self.assertEqual(

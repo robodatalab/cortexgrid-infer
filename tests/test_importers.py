@@ -13,21 +13,10 @@ import cloudpickle
 import cortexgrid
 from huggingface_hub.errors import NotASafetensorsRepoError
 
-from cortexgrid_infer.core import DeployedModel
 from cortexgrid_infer.importers.huggingface import HuggingFaceImporter, repo_weights
 from cortexgrid_infer.serve_apps.base import LocalModel, Weights
 
 HF = "cortexgrid_infer.importers.huggingface"
-
-
-class _FakeModel(DeployedModel):
-    def __init__(self, url: str, name: str) -> None:
-        self.url = url
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        return self._name
 
 
 class _FakeApp(LocalModel):
@@ -36,10 +25,6 @@ class _FakeApp(LocalModel):
     @classmethod
     def requirements(cls, weights: Weights) -> cortexgrid.ModelRequirements:
         return cortexgrid.ModelRequirements(num_gpus=1, vram_gb=weights.params or 0)
-
-    @classmethod
-    def client(cls, url: str, name: str) -> DeployedModel:
-        return _FakeModel(url, name)
 
 
 class _PrunedApp(_FakeApp):
@@ -80,12 +65,6 @@ class TestIdentity(unittest.TestCase):
 
 class TestTheServeAppDecides(unittest.TestCase):
     """What depends on the model's task comes from the serve app, not the source."""
-
-    def test_client_is_the_serve_app_s_named_for_the_repo(self):
-        model = HuggingFaceImporter("Qwen/Qwen2-2.5B-Instruct", _FakeApp).client("http://h/r/F/S/R")
-
-        self.assertIsInstance(model, _FakeModel)
-        self.assertEqual((model.url, model.name), ("http://h/r/F/S/R", "Qwen/Qwen2-2.5B-Instruct"))
 
     @mock.patch(f"{HF}.repo_weights", return_value=Weights(params=7))
     def test_requirements_are_the_serve_app_s_for_the_repo_s_weights(self, weights: mock.Mock):

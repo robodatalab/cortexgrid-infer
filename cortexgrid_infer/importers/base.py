@@ -29,7 +29,6 @@ from typing import Self
 
 import cortexgrid
 
-from cortexgrid_infer.core import DeployedModel
 from cortexgrid_infer.registry import ModelEntry, split_model_id
 from cortexgrid_infer.serve_apps.base import LocalModel, Weights
 
@@ -97,6 +96,3 @@ class Importer(ModelEntry):
 
     def config(self) -> dict[str, str]:
         return self.serve_app.config()
-
-    def client(self, url: str) -> DeployedModel:
-        return self.serve_app.client(url, self.model_id)

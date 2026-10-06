@@ -5,9 +5,9 @@ cortexgrid stores whatever weights it is handed under whatever key it is given,
 and serves them with whatever class it was told to bundle. It deliberately knows
 nothing about where a model came from or what shape it is. A `ModelEntry`
 supplies exactly that missing knowledge - the registry identity, the serve app,
-the hardware it needs, its config, and the client - and drives no lifecycle of
-its own: importing, deploying and deleting stay the caller's calls against the
-cortexgrid SDK.
+the hardware it needs, and its config - and drives no lifecycle of its own:
+importing, deploying and deleting stay the caller's calls against the cortexgrid
+SDK, and a deployment's client is the deployment's `client()`.
 
 A model with weights is an importer's (`cortexgrid_infer.importers`) and goes
 through `import_model`. A model hosted elsewhere is a `Hosted` entry and goes
@@ -27,7 +27,6 @@ import abc
 
 import cortexgrid
 
-from cortexgrid_infer.core import DeployedModel
 from cortexgrid_infer.serve_apps.base import HostedModel
 
 
@@ -49,8 +48,8 @@ def split_model_id(model_id: str) -> tuple[str, str]:
 class ModelEntry(abc.ABC):
     """One model as the registry files it and cortexgrid serves it."""
 
-    # The id the model is known by where it came from; the registry key and the
-    # client's name derive from it.
+    # The id the model is known by where it came from; the registry key derives
+    # from it.
     model_id: str
 
     # The class cortexgrid bundles and instantiates on the cluster.
@@ -71,10 +70,6 @@ class ModelEntry(abc.ABC):
         be asked for, the name of a secret to read. Empty for a model whose
         bundled code already knows everything it needs."""
         return {}
-
-    @abc.abstractmethod
-    def client(self, url: str) -> DeployedModel:
-        """Return a client for this model's serve app, deployed at `url`."""
 
 
 class Hosted(ModelEntry):
@@ -97,6 +92,3 @@ class Hosted(ModelEntry):
 
     def config(self) -> dict[str, str]:
         return dict(self._config)
-
-    def client(self, url: str) -> DeployedModel:
-        return self.serve_app.client(url, self.model_id)

@@ -6,29 +6,14 @@ import unittest
 
 import cortexgrid
 
-from cortexgrid_infer.core import DeployedModel
 from cortexgrid_infer.registry import Hosted, split_model_id
 from cortexgrid_infer.serve_apps.base import HostedModel
-
-
-class _FakeModel(DeployedModel):
-    def __init__(self, url: str, name: str) -> None:
-        self.url = url
-        self._name = name
-
-    @property
-    def name(self) -> str:
-        return self._name
 
 
 class _Forwarder(HostedModel):
     @classmethod
     def config(cls, model_id: str, region: str = "eu") -> dict[str, str]:
         return {"model": model_id, "region": region}
-
-    @classmethod
-    def client(cls, url: str, name: str) -> DeployedModel:
-        return _FakeModel(url, name)
 
 
 class TestSplitModelId(unittest.TestCase):
@@ -73,9 +58,3 @@ class TestHosted(unittest.TestCase):
         # Before anything reaches the registry, rather than on the first deploy.
         with self.assertRaises(TypeError):
             Hosted("fwd-large", _Forwarder, regoin="us")
-
-    def test_client_is_the_serve_app_s_named_for_the_model(self):
-        model = Hosted("fwd-large", _Forwarder).client("http://h/r/F/S/R")
-
-        self.assertIsInstance(model, _FakeModel)
-        self.assertEqual((model.url, model.name), ("http://h/r/F/S/R", "fwd-large"))
