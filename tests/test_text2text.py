@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import cortexgrid
-import json
 import torch
 import unittest
 from unittest import mock
 from transformers import Qwen3Config, Qwen3ForCausalLM
 
-from cortexgrid_infer.protocols.completion import ServedCompletingModel
 from cortexgrid_infer.serve_apps.text2text import (
     Text2Text,
     allowed_next_tokens,
@@ -18,7 +16,7 @@ from cortexgrid_infer.serve_apps.text2text import (
 
 
 class TestText2TextForTheImporter(unittest.TestCase):
-    def test_client_speaks_the_deployed_app(self):
+    def test_client_calls_the_deployed_app_s_endpoints(self):
         deployment = cortexgrid.Deployment(
             key=cortexgrid.DeploymentKey("F", "S", "R"),
             config={},
@@ -32,12 +30,9 @@ class TestText2TextForTheImporter(unittest.TestCase):
 
         model = Text2Text.client(deployment)
 
-        self.assertEqual(
-            model,
-            ServedCompletingModel(
-                key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
-            ),
-        )
+        self.assertIs(type(model), Text2Text.client)
+        self.assertEqual(model.key, cortexgrid.DeploymentKey("F", "S", "R"))
+        self.assertEqual(model.url, "http://h/r/F/S/R")
 
     def test_loads_every_file_the_repo_ships(self):
         # Every file a causal LM repo ships is one `from_pretrained` may read.
@@ -376,10 +371,11 @@ class TestText2TextReadsTheModel(unittest.IsolatedAsyncioTestCase):
         )
         for name, parts, continuations_of_each_part, expected in cases:
             with self.subTest(name):
-                response = await deployment.last_hidden_states(
-                    {"parts": parts, "continuations_of_each_part": continuations_of_each_part}
-                )
-                lines = [line async for line in response.body_iterator]
-                answered = [json.loads(line)["last_hidden_states"] for line in lines]
+                answered = [
+                    last_hidden_states
+                    async for last_hidden_states in deployment.last_hidden_states(
+                        parts, continuations_of_each_part
+                    )
+                ]
 
                 torch.testing.assert_close(answered, expected, atol=1e-4, rtol=0)

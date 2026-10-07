@@ -6,9 +6,9 @@ model to call and a key to call it with, and those come from the registry
 entry's `config`, set when the model was registered and editable on its model
 card afterwards.
 
-It speaks the same `/complete` protocol as `Text2Text`, so the same client talks
-to it. Anthropic reports tool calls as structured blocks rather than as
-generated text, so they are re-encoded on the way out.
+It is a `CompletingModel` like `Text2Text`, so a caller holds either the same
+way. Anthropic reports tool calls as structured blocks rather than as
+generated text, so `StreamedCompletionWriter` takes them as they are.
 """
 
 from __future__ import annotations
@@ -19,15 +19,11 @@ from typing import Any
 import cortexgrid
 from anthropic import AsyncAnthropic
 from cortexgrid import serve
-from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import StreamingResponse
 
-from cortexgrid_infer.core import Message, ToolSpec
-from cortexgrid_infer.protocols.completion import ServedCompletingModel
+from cortexgrid_infer.core import CompletingModel, CompletionChunk, Message, ToolSpec
 from cortexgrid_infer.serve_apps.base import HostedModel
 from cortexgrid_infer.serve_apps.streamed_completion import StreamedCompletionWriter
-
-_app = FastAPI()
+from cortexgrid_infer.utils import Tool
 
 # Keys the registry entry must carry for the deployment to reach the API.
 MODEL_PARAM = "model"
@@ -117,8 +113,8 @@ def to_anthropic_tools(
     return result
 
 
-@serve.ingress(_app)
-class AnthropicText2Text(HostedModel):
+@serve.ingress
+class AnthropicText2Text(HostedModel, CompletingModel):
     @classmethod
     def config(
         cls, model_id: str, api_key_secret: str = DEFAULT_API_KEY_SECRET
@@ -127,10 +123,6 @@ class AnthropicText2Text(HostedModel):
         deployment sends upstream; `api_key_secret` names the cortexgrid secret
         holding the key to send it with."""
         return {MODEL_PARAM: model_id, API_KEY_SECRET_PARAM: api_key_secret}
-
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[ServedCompletingModel]) -> ServedCompletingModel:
-        return ServedCompletingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         config = cortexgrid.model_config(deployment)
@@ -146,47 +138,43 @@ class AnthropicText2Text(HostedModel):
             api_key=cortexgrid.get_secret(config[API_KEY_SECRET_PARAM])
         )
 
-    @_app.post("/complete")
-    async def complete(self, body: dict[str, Any]) -> StreamingResponse:
-        system_prompt, messages = to_anthropic_messages(body["messages"])
-        tools = to_anthropic_tools(body.get("tools"))
+    @serve.endpoint
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[Tool] | None = None,
+        max_new_tokens: int | None = None,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[CompletionChunk]:
+        system_prompt, anthropic_messages = to_anthropic_messages(messages)
+        anthropic_tools = to_anthropic_tools(tools)
 
         create_kwargs: dict[str, Any] = {
             "model": self._model,
-            "messages": messages,
-            "max_tokens": body.get("max_new_tokens", 16 * 1024),
-            "temperature": body.get("temperature", 0.7),
+            "messages": anthropic_messages,
+            "max_tokens": 16 * 1024 if max_new_tokens is None else max_new_tokens,
+            "temperature": temperature,
         }
         if system_prompt:
             create_kwargs["system"] = system_prompt
-        if tools:
-            create_kwargs["tools"] = tools
+        if anthropic_tools:
+            create_kwargs["tools"] = anthropic_tools
 
-        async def stream() -> AsyncIterator[bytes]:
-            writer = StreamedCompletionWriter()
-            async with self._client.messages.stream(**create_kwargs) as events:
-                async for event in events:
-                    if (
-                        event.type == "content_block_delta"
-                        and event.delta.type == "text_delta"
-                    ):
-                        line = writer.read_content(event.delta.text)
-                        yield line
+        writer = StreamedCompletionWriter()
+        async with self._client.messages.stream(**create_kwargs) as events:
+            async for event in events:
+                if (
+                    event.type == "content_block_delta"
+                    and event.delta.type == "text_delta"
+                ):
+                    chunk = writer.read_content(event.delta.text)
+                    yield chunk
 
-                    elif event.type == "content_block_stop":
-                        block = events.current_message_snapshot.content[event.index]
-                        if block.type == "tool_use":
-                            arguments = dict(block.input)
-                            line = writer.read_tool_call(block.name, arguments, block.id)
-                            yield line
-            for line in writer.finish():
-                yield line
-
-        return StreamingResponse(stream(), media_type="application/x-ndjson")
-
-    @_app.post("/last_hidden_states")
-    async def last_hidden_states(self, body: dict[str, Any]) -> None:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Anthropic does not expose its models' hidden states",
-        )
+                elif event.type == "content_block_stop":
+                    block = events.current_message_snapshot.content[event.index]
+                    if block.type == "tool_use":
+                        arguments = dict(block.input)
+                        chunk = writer.read_tool_call(block.name, arguments, block.id)
+                        yield chunk
+        for chunk in writer.finish():
+            yield chunk

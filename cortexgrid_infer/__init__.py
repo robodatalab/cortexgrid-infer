@@ -7,9 +7,9 @@ nothing else, split along the two things a model is:
 
 - where its weights come from - an importer per source (`importers`), which
   names, fetches and sizes them;
-- what runs it - a serve app per task (`serve_apps`), which loads the weights,
-  answers the task's routes (`protocols`), and names the client that speaks
-  them.
+- what runs it - a serve app per task (`serve_apps`), which loads the weights
+  and serves the task's endpoints, declared by the task's type in `core`
+  (`CompletingModel`, say); cortexgrid generates the client that calls them.
 
     imp = cortexgrid_infer.HuggingFaceImporter("Qwen/Qwen2.5-0.5B-Instruct", cortexgrid_infer.Text2Text)
     with imp:
@@ -19,7 +19,7 @@ nothing else, split along the two things a model is:
             requirements=imp.requirements(),
         )
     deployment = cortexgrid.deploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED)
-    model = deployment.client()
+    model: cortexgrid_infer.CompletingModel = deployment.client()
 
 A model hosted elsewhere has no weights and so no importer: its serve app
 forwards to it, and a `Hosted` entry registers it.
@@ -46,12 +46,6 @@ from cortexgrid_infer.core import (
     generate,
     mesh,
     rewrite,
-)
-from cortexgrid_infer.protocols import (
-    ServedCompletingModel,
-    ServedGeneratingModel,
-    ServedMeshingModel,
-    ServedRewritingModel,
 )
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.serve_apps import (
@@ -88,10 +82,6 @@ __all__ = [
     "rewrite",
     "ModelDeployFailed",
     "detect_device",
-    "ServedCompletingModel",
-    "ServedGeneratingModel",
-    "ServedMeshingModel",
-    "ServedRewritingModel",
     "LocalModel",
     "HostedModel",
     "Weights",

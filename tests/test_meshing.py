@@ -4,7 +4,6 @@ app every model of the task subclasses."""
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import unittest
 from pathlib import Path
@@ -18,7 +17,6 @@ from PIL import Image
 import torch
 
 from cortexgrid_infer.core import GeneratedMesh
-from cortexgrid_infer.protocols.meshing import ServedMeshingModel
 from cortexgrid_infer.serve_apps.base import Weights
 from cortexgrid_infer.serve_apps.image2mesh import Image2Mesh
 
@@ -34,34 +32,6 @@ def _png(image: Image.Image) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
-
-
-class _FakeResponse:
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-
-    def raise_for_status(self) -> None:
-        pass
-
-    def json(self) -> dict[str, Any]:
-        return self._payload
-
-
-class _FakeAsyncClient:
-    captured: dict[str, Any] = {}
-
-    def __init__(self, payload: dict[str, Any]) -> None:
-        self._payload = payload
-
-    async def __aenter__(self) -> "_FakeAsyncClient":
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        pass
-
-    async def post(self, url: str, json: dict[str, Any]) -> _FakeResponse:
-        type(self).captured = {"url": url, "json": json}
-        return _FakeResponse(self._payload)
 
 
 class _TriangleDeployment(Image2Mesh):
@@ -95,9 +65,9 @@ class TestImage2Mesh(unittest.TestCase):
              mock.patch(f"{self.SERVE}.detect_device", return_value="cpu"):
             self.deployment = _TriangleDeployment(cortexgrid.DeploymentKey("family", "suffix", "imported"))
 
-    def mesh(self, **body: Any) -> dict[str, Any]:
-        image = base64.b64encode(_png(Image.new("RGBA", (40, 20)))).decode("ascii")
-        return asyncio.run(self.deployment.mesh({"image": image, **body}))
+    def mesh(self, **options: Any) -> GeneratedMesh:
+        image = _png(Image.new("RGBA", (40, 20)))
+        return asyncio.run(self.deployment.mesh(image, options))
 
     def test_loads_the_model_from_the_registry(self):
         self.assertEqual(self.deployment.loaded, (Path("/weights"), "cpu"))
@@ -110,40 +80,13 @@ class TestImage2Mesh(unittest.TestCase):
     def test_answers_with_the_mesh_and_what_the_model_resolved(self):
         reply = self.mesh()
 
-        vertices = np.frombuffer(base64.b64decode(reply["vertices"]), "<f4").reshape(-1, 3)
-        np.testing.assert_array_equal(vertices, TRIANGLE.vertices)
-        self.assertEqual(list(np.frombuffer(base64.b64decode(reply["faces"]), "<i4")), [0, 1, 2])
-        self.assertEqual(reply["params"], {"resolution": 64})
-        self.assertIn("duration_s", reply)
+        np.testing.assert_array_equal(reply.vertices, TRIANGLE.vertices)
+        np.testing.assert_array_equal(reply.faces, TRIANGLE.faces)
+        np.testing.assert_array_equal(reply.colours, TRIANGLE.colours)
+        self.assertEqual(reply.params, {"resolution": 64, "duration_s": mock.ANY})
 
-    def test_a_model_s_serve_app_is_fronted_by_the_family_s_route(self):
+    def test_a_model_s_serve_app_is_fronted_by_the_family_s_endpoint(self):
         self.assertIs(serve.ingress_app(_TriangleDeployment), serve.ingress_app(Image2Mesh))
-
-
-class TestServedMeshingModel(unittest.IsolatedAsyncioTestCase):
-    async def test_round_trips_a_mesh_through_the_protocol(self):
-        with mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.load_model", return_value="/w"), \
-             mock.patch("cortexgrid_infer.serve_apps.image2mesh.cortexgrid.model_config", return_value={}):
-            deployment = _TriangleDeployment(cortexgrid.DeploymentKey("family", "suffix", "imported"))
-        model = ServedMeshingModel(
-            key=cortexgrid.DeploymentKey("Tri", "base", "R"), url="http://h/r/Tri/base/R"
-        )
-        payload: dict[str, Any] = {}
-
-        class _Served(_FakeAsyncClient):
-            async def post(self, url: str, json: dict[str, Any]) -> _FakeResponse:
-                type(self).captured = {"url": url, "json": json}
-                return _FakeResponse(await deployment.mesh(dict(json)))
-
-        with mock.patch("cortexgrid_infer.protocols.meshing.httpx.AsyncClient", lambda *_a, **_kw: _Served(payload)):
-            made = await model.mesh(_png(Image.new("RGBA", (8, 8))), resolution=32)
-
-        np.testing.assert_array_equal(made.vertices, TRIANGLE.vertices)
-        np.testing.assert_array_equal(made.faces, TRIANGLE.faces)
-        np.testing.assert_array_equal(made.colours, TRIANGLE.colours)
-        self.assertEqual(made.params["resolution"], 64)
-        self.assertEqual(_Served.captured["url"], "http://h/r/Tri/base/R/mesh")
-        self.assertEqual(deployment.asked[1], {"resolution": 32})
 
 
 class TestImage2MeshCompiles(unittest.TestCase):
@@ -190,7 +133,7 @@ class TestImage2MeshForTheImporter(unittest.TestCase):
     def test_the_model_card_serves_eager_unless_told_otherwise(self):
         self.assertEqual(_TriangleDeployment.config(), {"compile": "false"})
 
-    def test_client_speaks_the_task_s_protocol(self):
+    def test_client_calls_the_family_s_endpoint(self):
         deployment = cortexgrid.Deployment(
             key=cortexgrid.DeploymentKey("Tri", "small", "R"),
             config={},
@@ -204,13 +147,9 @@ class TestImage2MeshForTheImporter(unittest.TestCase):
 
         model = _TriangleDeployment.client(deployment)
 
-        self.assertEqual(
-            model,
-            ServedMeshingModel(
-                key=cortexgrid.DeploymentKey("Tri", "small", "R"),
-                url="http://h/r/Tri/small/R",
-            ),
-        )
+        self.assertIs(type(model), Image2Mesh.client)
+        self.assertEqual(model.key, cortexgrid.DeploymentKey("Tri", "small", "R"))
+        self.assertEqual(model.url, "http://h/r/Tri/small/R")
 
     def test_asks_for_the_memory_meshing_takes_not_just_the_weights(self):
         needs = _TriangleDeployment.requirements(Weights(params=1_000_000))

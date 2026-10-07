@@ -8,12 +8,10 @@ import unittest
 from unittest import mock
 
 import cortexgrid
-from fastapi import HTTPException
 from google.genai import types
 
-from cortexgrid_infer.protocols.completion import ServedCompletingModel
+from cortexgrid_infer.core import CompletionChunk, ToolCall
 from cortexgrid_infer.serve_apps import streamed_completion
-from cortexgrid_infer.serve_apps.streamed_completion import completion_chunk
 from cortexgrid_infer.registry import Hosted
 from cortexgrid_infer.serve_apps.gemini.text2text import (
     SKIP_THOUGHT_SIGNATURE,
@@ -30,9 +28,7 @@ class TestHostedGeminiText2Text(unittest.TestCase):
         entry = Hosted("gemini-2.5-pro", GeminiText2Text)
         self.assertEqual((entry.family, entry.suffix), ("gemini-2.5", "pro"))
 
-    def test_client_is_the_shared_completion_client(self):
-        # The serve app speaks the same /complete protocol as Text2Text, so
-        # there is nothing Gemini-specific left on the client side.
+    def test_client_calls_the_complete_endpoint(self):
         deployment = cortexgrid.Deployment(
             key=cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"),
             config={},
@@ -46,13 +42,9 @@ class TestHostedGeminiText2Text(unittest.TestCase):
 
         model = GeminiText2Text.client(deployment)
 
-        self.assertEqual(
-            model,
-            ServedCompletingModel(
-                key=cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"),
-                url="http://h/r/F/S/R",
-            ),
-        )
+        self.assertIs(type(model), GeminiText2Text.client)
+        self.assertEqual(model.key, cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"))
+        self.assertEqual(model.url, "http://h/r/F/S/R")
 
     def test_asks_for_no_hardware(self):
         self.assertEqual(
@@ -100,17 +92,16 @@ class TestComplete(unittest.TestCase):
                 cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported")
             )
 
-            async def run() -> bytes:
-                response = await GeminiText2Text.complete(deployment, body)
-                return b"".join([piece async for piece in response.body_iterator])
+            async def run() -> list[CompletionChunk]:
+                return [chunk async for chunk in deployment.complete(**body)]
 
-            return asyncio.run(run()).decode("utf-8"), generate
+            return asyncio.run(run()), generate
 
     def test_streams_text_and_re_encodes_function_calls(self):
         call = types.FunctionCall(name="add", args={"a": 1, "b": 2})
 
         with mock.patch.object(streamed_completion, "_tool_call_id_counter", itertools.count()):
-            text, _generate = self._complete(
+            completed, _generate = self._complete(
                 [
                     _chunk(types.Part(text="let me ")),
                     _chunk(types.Part(text="check")),
@@ -119,15 +110,17 @@ class TestComplete(unittest.TestCase):
                 {"messages": [{"role": "user", "content": "1+2?"}]},
             )
 
-        expected = [
-            completion_chunk(content="let me "),
-            completion_chunk(content="check"),
-            completion_chunk(tool_calls=[{"id": "call_0", "name": "add", "arguments": {"a": 1, "b": 2}}]),
-        ]
-        self.assertEqual(text, b"".join(expected).decode("utf-8"))
+        self.assertEqual(
+            completed,
+            [
+                CompletionChunk(content="let me "),
+                CompletionChunk(content="check"),
+                CompletionChunk(tool_calls=[ToolCall(id="call_0", name="add", arguments={"a": 1, "b": 2})]),
+            ],
+        )
 
     def test_returns_thoughts_as_thinking_and_leaves_out_empty_chunks(self):
-        text, _generate = self._complete(
+        completed, _generate = self._complete(
             [
                 _chunk(types.Part(text="pondering", thought=True)),
                 types.GenerateContentResponse(candidates=[]),
@@ -136,15 +129,17 @@ class TestComplete(unittest.TestCase):
             {"messages": [{"role": "user", "content": "2+2?"}]},
         )
 
-        expected = [
-            completion_chunk(thinking="pondering"),
-            completion_chunk(content="4"),
-            completion_chunk(finish_reason="stop"),
-        ]
-        self.assertEqual(text, b"".join(expected).decode("utf-8"))
+        self.assertEqual(
+            completed,
+            [
+                CompletionChunk(thinking="pondering"),
+                CompletionChunk(content="4"),
+                CompletionChunk(finish_reason="stop"),
+            ],
+        )
 
     def test_a_model_card_with_thinking_off_asks_for_no_thinking(self):
-        _text, generate = self._complete(
+        _completed, generate = self._complete(
             [],
             {"messages": [{"role": "user", "content": "2+2?"}]},
             card={"enable_thinking": "false"},
@@ -155,7 +150,7 @@ class TestComplete(unittest.TestCase):
         )
 
     def test_sends_the_configured_model_and_request_settings(self):
-        _text, generate = self._complete(
+        _completed, generate = self._complete(
             [],
             {
                 "messages": [
@@ -363,21 +358,6 @@ class TestToolConversion(unittest.TestCase):
         types.Tool.model_validate(result[0])
 
 
-class TestGeminiText2TextHiddenStates(unittest.IsolatedAsyncioTestCase):
-    @mock.patch(f"{BASE}.genai")
-    @mock.patch(f"{BASE}.cortexgrid")
-    async def test_refuses_to_give_out_hidden_states(
-        self, mock_cortexgrid: mock.Mock, _mock_genai: mock.Mock
-    ):
-        mock_cortexgrid.model_config.return_value = {
-            "model": "gemini-2.5-pro",
-            "api_key_secret": "GEMINI_API_KEY",
-        }
-        deployment = GeminiText2Text(cortexgrid.DeploymentKey("gemini-2.5", "pro", "imported"))
-
-        with self.assertRaises(HTTPException) as caught:
-            await deployment.last_hidden_states(
-                {"parts": ["It rained.\n"], "continuations_of_each_part": [["Ann | is | wet"]]}
-            )
-
-        self.assertEqual(caught.exception.status_code, 501)
+class TestGeminiText2TextHiddenStates(unittest.TestCase):
+    def test_its_client_offers_no_hidden_states(self):
+        self.assertFalse(hasattr(GeminiText2Text.client, "last_hidden_states"))

@@ -115,7 +115,7 @@ def main() -> None:
             run_name=cortexgrid.IMPORTED,
         )
 
-        model: mg.ServedCompletingModel = deployment.client()
+        model: mg.CompletingModel = deployment.client()
         chat(model)
     finally:
         print("deleting")

@@ -11,8 +11,8 @@ task whatever the source. Two kinds:
 - `HostedModel` forwards to a model hosted elsewhere, so there is nothing to
   import; it tells `registry.Hosted` what config it reads instead.
 
-Both name the client that speaks their routes. cortexgrid's `serve.ingress`
-leaves the class exactly as written, so all of this rides along as class
+cortexgrid's `serve.ingress` generates the client that calls their endpoints
+and leaves the class otherwise as written, so all of this rides along as class
 attributes and classmethods, with no separate description of the model to keep
 in step with it.
 """
@@ -20,7 +20,7 @@ in step with it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import ClassVar
 
 import cortexgrid
 
@@ -104,11 +104,6 @@ class LocalModel:
     def config(cls) -> dict[str, str]:
         return {COMPILE_PARAM: "false"}
 
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[Any]) -> cortexgrid.DeploymentClient:
-        """A client for this app's `deployment`."""
-        raise NotImplementedError
-
 
 class HostedModel:
     """Base of the serve apps that forward to a model hosted elsewhere."""
@@ -124,8 +119,3 @@ class HostedModel:
         """None: a replica holds no weights and does no compute of its own, so
         it is placed on any node, CPU-only included."""
         return cortexgrid.ModelRequirements()
-
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[Any]) -> cortexgrid.DeploymentClient:
-        """A client for this app's `deployment`."""
-        raise NotImplementedError

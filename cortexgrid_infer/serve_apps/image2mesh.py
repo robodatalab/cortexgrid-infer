@@ -1,12 +1,12 @@
-"""The base of every image-to-mesh serve app: the `POST /mesh` route and loading the
+"""The base of every image-to-mesh serve app: the `mesh` endpoint and loading the
 model's files from the cortexgrid registry, around the two steps that differ per
 model.
 
 There is no one loader for image-to-mesh models the way `AutoModelForCausalLM`
 or a diffusers `model_index.json` serves a whole family of repos: each model
 ships its own code. So a model's serve app subclasses `Image2Mesh` and supplies
-`load` and `make_mesh`; the subclass inherits the route, whose protocol is
-`cortexgrid_infer.protocols.meshing`'s, and the client that speaks it.
+`load` and `make_mesh`; the subclass inherits the endpoint, whose contract is
+`cortexgrid_infer.core.MeshingModel`'s, and the client that calls it.
 cortexgrid bundles the subclass's own file, so the model's code travels with it.
 
     class MyMesh(Image2Mesh):
@@ -20,7 +20,6 @@ cortexgrid bundles the subclass's own file, so the model's code travels with it.
 
 from __future__ import annotations
 
-import base64
 import io
 import time
 from pathlib import Path
@@ -28,31 +27,22 @@ from typing import Any
 
 import cortexgrid
 from cortexgrid import serve
-from fastapi import FastAPI
 from PIL import Image, ImageOps
+from pydantic import Base64Bytes
 import torch
 
 from cortexgrid_infer import compiling
-from cortexgrid_infer.core import GeneratedMesh
+from cortexgrid_infer.core import GeneratedMesh, MeshingModel
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.protocols import meshing
-from cortexgrid_infer.protocols.meshing import ServedMeshingModel
 from cortexgrid_infer.serve_apps.base import COMPILE_PARAM, LocalModel
 
 
-_app = FastAPI()
-
-
-@serve.ingress(_app)
-class Image2Mesh(LocalModel):
+@serve.ingress
+class Image2Mesh(LocalModel, MeshingModel):
     """One replica of an image-to-mesh model.
 
     A subclass sets `min_vram_gb` where meshing takes memory the weights do not
     show - querying the model over a whole 3D grid usually does."""
-
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[ServedMeshingModel]) -> ServedMeshingModel:
-        return ServedMeshingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         self.device = detect_device()
@@ -84,19 +74,25 @@ class Image2Mesh(LocalModel):
         model resolved them to."""
         raise NotImplementedError
 
-    @_app.post("/mesh")
-    async def mesh(self, body: dict[str, Any]) -> dict[str, Any]:
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(base64.b64decode(body["image"]))))
-        options = {key: value for key, value in body.items() if key != "image" and value is not None}
+    @serve.endpoint
+    async def mesh(
+        self, image: Base64Bytes, options: dict[str, Any] | None = None
+    ) -> GeneratedMesh:
+        picture = Image.open(io.BytesIO(image))
+        upright = ImageOps.exif_transpose(picture)
+        requested_options = options or {}
+        given_options = {
+            key: value for key, value in requested_options.items() if value is not None
+        }
 
         t0 = time.time()
-        made = self.make_mesh(image, **options)
+        made = self.make_mesh(upright, **given_options)
         duration = time.time() - t0
 
-        return {
-            "vertices": meshing.encode(made.vertices, meshing.VERTICES),
-            "faces": meshing.encode(made.faces, meshing.FACES),
-            "colours": meshing.encode(made.colours, meshing.COLOURS),
-            "params": made.params,
-            "duration_s": round(duration, 2),
-        }
+        meshed = GeneratedMesh(
+            vertices=made.vertices,
+            faces=made.faces,
+            colours=made.colours,
+            params={**made.params, "duration_s": round(duration, 2)},
+        )
+        return meshed

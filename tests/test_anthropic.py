@@ -6,9 +6,7 @@ import unittest
 from unittest import mock
 
 import cortexgrid
-from fastapi import HTTPException
 
-from cortexgrid_infer.protocols.completion import ServedCompletingModel
 from cortexgrid_infer.registry import Hosted
 from cortexgrid_infer.serve_apps.anthropic import (
     AnthropicText2Text,
@@ -24,9 +22,7 @@ class TestHostedAnthropic(unittest.TestCase):
         entry = Hosted("claude-sonnet-5", AnthropicText2Text)
         self.assertEqual((entry.family, entry.suffix), ("claude-sonnet", "5"))
 
-    def test_client_is_the_shared_completion_client(self):
-        # The serve app speaks the same /complete protocol as Text2Text, so
-        # there is nothing Anthropic-specific left on the client side.
+    def test_client_calls_the_complete_endpoint(self):
         deployment = cortexgrid.Deployment(
             key=cortexgrid.DeploymentKey("claude-sonnet", "5", "imported"),
             config={},
@@ -40,13 +36,9 @@ class TestHostedAnthropic(unittest.TestCase):
 
         model = AnthropicText2Text.client(deployment)
 
-        self.assertEqual(
-            model,
-            ServedCompletingModel(
-                key=cortexgrid.DeploymentKey("claude-sonnet", "5", "imported"),
-                url="http://h/r/F/S/R",
-            ),
-        )
+        self.assertIs(type(model), AnthropicText2Text.client)
+        self.assertEqual(model.key, cortexgrid.DeploymentKey("claude-sonnet", "5", "imported"))
+        self.assertEqual(model.url, "http://h/r/F/S/R")
 
     def test_asks_for_no_hardware(self):
         self.assertEqual(
@@ -192,23 +184,6 @@ class TestToolConversion(unittest.TestCase):
         )
 
 
-class TestAnthropicText2TextHiddenStates(unittest.IsolatedAsyncioTestCase):
-    @mock.patch(f"{SERVE}.AsyncAnthropic")
-    @mock.patch(f"{SERVE}.cortexgrid")
-    async def test_refuses_to_give_out_hidden_states(
-        self, mock_cortexgrid: mock.Mock, _mock_client: mock.Mock
-    ):
-        mock_cortexgrid.model_config.return_value = {
-            "model": "claude-sonnet-5",
-            "api_key_secret": "TEAM_KEY",
-        }
-        deployment = AnthropicText2Text(
-            cortexgrid.DeploymentKey("claude-sonnet", "5", "imported")
-        )
-
-        with self.assertRaises(HTTPException) as caught:
-            await deployment.last_hidden_states(
-                {"parts": ["It rained.\n"], "continuations_of_each_part": [["Ann | is | wet"]]}
-            )
-
-        self.assertEqual(caught.exception.status_code, 501)
+class TestAnthropicText2TextHiddenStates(unittest.TestCase):
+    def test_its_client_offers_no_hidden_states(self):
+        self.assertFalse(hasattr(AnthropicText2Text.client, "last_hidden_states"))

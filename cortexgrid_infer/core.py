@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import abc
+import base64
 from dataclasses import dataclass, field
-from functools import partial
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, Callable, Sequence
+from functools import partial
+from typing import Annotated, Any
 
-import cortexgrid
 import numpy as np
 import torch
-from pydantic import PlainSerializer, PlainValidator
+from pydantic import Base64Bytes, PlainSerializer, PlainValidator
+
+from cortexgrid_infer.utils import Tool, ToolSpec
 
 
 Tensor = Annotated[
@@ -26,10 +28,6 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
-    _func: partial[Any] = field(repr=False)
-
-    def __call__(self) -> Any:
-        return self._func(**self.arguments)
 
 
 @dataclass
@@ -47,42 +45,18 @@ class CompletionChunk:
     def has_tool_calls(self) -> bool:
         return bool(self.tool_calls)
 
-    @classmethod
-    def from_wire(
-        cls, answered: dict[str, Any], tools_by_name: dict[str, Callable[..., Any]]
-    ) -> CompletionChunk:
-        tool_calls = []
-        for called in answered["tool_calls"]:
-            tool = tools_by_name.get(called["name"])
-            if tool is None:
-                continue
-            bound = partial(tool, **called["arguments"])
-            tool_call = ToolCall(
-                id=called["id"], name=called["name"], arguments=called["arguments"], _func=bound
-            )
-            tool_calls.append(tool_call)
-        return cls(
-            content=answered["content"],
-            thinking=answered["thinking"],
-            tool_calls=tool_calls,
-            finish_reason=answered["finish_reason"],
-        )
-
 
 Message = dict[str, Any]
-ToolSpec = dict[str, Any]
-Tool = Callable[..., Any] | ToolSpec
 
 
-class CompletingModel(cortexgrid.DeploymentClient, abc.ABC):
+class CompletingModel(abc.ABC):
     @abc.abstractmethod
     def complete(
         self,
         messages: list[Message],
-        tools: Sequence[Tool] | None = None,
-        max_new_tokens: int = 2048,
+        tools: list[Tool] | None = None,
+        max_new_tokens: int | None = None,
         temperature: float = 0.7,
-        **kwargs: Any,
     ) -> AsyncIterator[CompletionChunk]: ...
 
 
@@ -91,13 +65,13 @@ class GeneratedImage:
     """One generated image: the encoded file bytes (PNG) plus the resolved
     parameters the deployment used to produce it."""
 
-    image: bytes
+    image: Base64Bytes
     width: int
     height: int
     params: dict[str, Any] = field(default_factory=dict)
 
 
-class GeneratingModel(cortexgrid.DeploymentClient, abc.ABC):
+class GeneratingModel(abc.ABC):
     """A deployed image model. Unlike completion, generation is a single
     request/response (no token streaming), so `generate` returns one result."""
 
@@ -106,13 +80,41 @@ class GeneratingModel(cortexgrid.DeploymentClient, abc.ABC):
         self,
         prompt: str,
         *,
-        image: bytes | None = None,
+        image: Base64Bytes | None = None,
         steps: int | None = None,
         guidance: float | None = None,
         size: int = 1024,
         seed: int | None = None,
-        **kwargs: Any,
     ) -> GeneratedImage: ...
+
+
+def _encoded_array(array: np.ndarray, dtype: str) -> str:
+    contiguous = np.ascontiguousarray(array, dtype=dtype)
+    encoded = base64.b64encode(contiguous.tobytes())
+    return encoded.decode("ascii")
+
+
+def _decoded_array(data: str, dtype: str, columns: int) -> np.ndarray:
+    raw = base64.b64decode(data)
+    flat = np.frombuffer(raw, dtype=dtype)
+    return flat.reshape(-1, columns)
+
+
+Vertices = Annotated[
+    np.ndarray,
+    PlainValidator(partial(_decoded_array, dtype="<f4", columns=3)),
+    PlainSerializer(partial(_encoded_array, dtype="<f4")),
+]
+Faces = Annotated[
+    np.ndarray,
+    PlainValidator(partial(_decoded_array, dtype="<i4", columns=3)),
+    PlainSerializer(partial(_encoded_array, dtype="<i4")),
+]
+Colours = Annotated[
+    np.ndarray,
+    PlainValidator(partial(_decoded_array, dtype="u1", columns=3)),
+    PlainSerializer(partial(_encoded_array, dtype="u1")),
+]
 
 
 @dataclass
@@ -122,35 +124,36 @@ class GeneratedMesh:
     into them, counter-clockwise seen from outside; `colours` (N, 3) uint8, each
     vertex's colour. Plus the resolved parameters the deployment used."""
 
-    vertices: np.ndarray
-    faces: np.ndarray
-    colours: np.ndarray
+    vertices: Vertices
+    faces: Faces
+    colours: Colours
     params: dict[str, Any] = field(default_factory=dict)
 
 
-class MeshingModel(cortexgrid.DeploymentClient, abc.ABC):
+class MeshingModel(abc.ABC):
     """A deployed model that makes a mesh of the object in one picture."""
 
     @abc.abstractmethod
-    async def mesh(self, image: bytes, **kwargs: Any) -> GeneratedMesh: ...
+    async def mesh(
+        self, image: Base64Bytes, options: dict[str, Any] | None = None
+    ) -> GeneratedMesh: ...
 
 
-class RewritingModel(cortexgrid.DeploymentClient, abc.ABC):
+class RewritingModel(abc.ABC):
     """A deployed model that rewrites one text into another - corrects,
     paraphrases, summarises or translates it. Like generation, a single
     request/response."""
 
     @abc.abstractmethod
-    async def rewrite(self, text: str, max_new_tokens: int = 512, **kwargs: Any) -> str: ...
+    async def rewrite(self, text: str, max_new_tokens: int = 512) -> str: ...
 
 
 async def complete(
     deployed_model: CompletingModel,
     messages: list[Message],
-    tools: Sequence[Tool] | None = None,
-    max_new_tokens: int = 2048,
+    tools: list[Tool] | None = None,
+    max_new_tokens: int | None = None,
     temperature: float = 0.7,
-    **kwargs: Any,
 ) -> AsyncIterator[CompletionChunk]:
     """Async completion request to the deployed model."""
     async for chunk in deployed_model.complete(
@@ -158,7 +161,6 @@ async def complete(
         tools,
         max_new_tokens=max_new_tokens,
         temperature=temperature,
-        **kwargs,
     ):
         yield chunk
 
@@ -168,22 +170,28 @@ async def generate(
     prompt: str,
     *,
     image: bytes | None = None,
-    **kwargs: Any,
+    steps: int | None = None,
+    guidance: float | None = None,
+    size: int = 1024,
+    seed: int | None = None,
 ) -> GeneratedImage:
     """Single image-generation request to the deployed model."""
-    return await deployed_model.generate(prompt, image=image, **kwargs)
+    return await deployed_model.generate(
+        prompt, image=image, steps=steps, guidance=guidance, size=size, seed=seed
+    )
 
 
-async def mesh(deployed_model: MeshingModel, image: bytes, **kwargs: Any) -> GeneratedMesh:
+async def mesh(
+    deployed_model: MeshingModel, image: bytes, options: dict[str, Any] | None = None
+) -> GeneratedMesh:
     """Single image-to-mesh request to the deployed model."""
-    return await deployed_model.mesh(image, **kwargs)
+    return await deployed_model.mesh(image, options)
 
 
 async def rewrite(
     deployed_model: RewritingModel,
     text: str,
     max_new_tokens: int = 512,
-    **kwargs: Any,
 ) -> str:
     """Single rewriting request to the deployed model."""
-    return await deployed_model.rewrite(text, max_new_tokens=max_new_tokens, **kwargs)
+    return await deployed_model.rewrite(text, max_new_tokens=max_new_tokens)

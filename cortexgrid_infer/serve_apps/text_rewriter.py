@@ -1,5 +1,5 @@
 """The text-rewriting serve app: an encoder-decoder LM loaded from the cortexgrid
-registry, answering `POST /rewrite` (see `cortexgrid_infer.protocols.rewriting`).
+registry, answering its `rewrite` endpoint (see `cortexgrid_infer.core.RewritingModel`).
 
 Loads with `AutoModelForSeq2SeqLM`, so it runs any encoder-decoder model (T5,
 BART, Marian, ...) whose weights are in the transformers layout, whichever
@@ -14,19 +14,17 @@ from typing import Any
 
 import cortexgrid
 from cortexgrid import serve
-from fastapi import FastAPI
 from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, CompileConfig
 import torch
 
 from cortexgrid_infer import compiling
+from cortexgrid_infer.core import RewritingModel
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.protocols.rewriting import ServedRewritingModel
 from cortexgrid_infer.serve_apps.base import COMPILE_PARAM, LocalModel
 
 
 log = logging.getLogger(__name__)
 
-_app = FastAPI()
 
 # Output budget for a request that names none: T5's training context, and
 # generation stops at the end-of-sequence token well before it for most text.
@@ -44,12 +42,8 @@ def _bucket(length: int) -> int:
     return next((b for b in _INPUT_BUCKETS if b >= length), _INPUT_BUCKETS[-1])
 
 
-@serve.ingress(_app)
-class TextRewriter(LocalModel):
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[ServedRewritingModel]) -> ServedRewritingModel:
-        return ServedRewritingModel(key=deployment.key, url=deployment.url)
-
+@serve.ingress
+class TextRewriter(LocalModel, RewritingModel):
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         path = cortexgrid.load_model(deployment.family, deployment.suffix, deployment.run_name)
         self._device = detect_device()
@@ -92,16 +86,21 @@ class TextRewriter(LocalModel):
             return_tensors="pt",
         ).to(self._device)
 
-    @_app.post("/rewrite")
-    async def rewrite(self, body: dict[str, Any]) -> dict[str, str]:
-        generation_options = {"max_new_tokens": DEFAULT_MAX_NEW_TOKENS} | {
-            key: value for key, value in body.items() if key != "text"
-        }
+    @serve.endpoint
+    async def rewrite(
+        self,
+        text: str,
+        max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+        generation_options: dict[str, Any] | None = None,
+    ) -> str:
+        requested_options = generation_options or {}
+        options = {"max_new_tokens": max_new_tokens} | requested_options
         if self._compiled:
             # A reply longer than the cache would reallocate it and recompile.
-            generation_options["max_new_tokens"] = min(
-                generation_options["max_new_tokens"], DEFAULT_MAX_NEW_TOKENS
+            options["max_new_tokens"] = min(
+                options["max_new_tokens"], DEFAULT_MAX_NEW_TOKENS
             )
-        inputs = self._tokenize(body["text"])
-        output = self._model.generate(**inputs, **generation_options)
-        return {"text": self._tokenizer.decode(output[0], skip_special_tokens=True)}
+        inputs = self._tokenize(text)
+        output = self._model.generate(**inputs, **options)
+        rewritten = self._tokenizer.decode(output[0], skip_special_tokens=True)
+        return rewritten

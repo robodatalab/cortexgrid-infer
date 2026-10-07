@@ -1,8 +1,8 @@
 """The text-to-text serve app that forwards to the Gemini API.
 
-It speaks the same `/complete` protocol as `Text2Text`, so the same client talks
-to it. Gemini reports tool calls as structured parts rather than as generated
-text, so they are re-encoded on the way out.
+It is a `CompletingModel` like `Text2Text`, so a caller holds either the same
+way. Gemini reports tool calls as structured parts rather than as generated
+text, so `StreamedCompletionWriter` takes them as they are.
 """
 
 from __future__ import annotations
@@ -11,18 +11,13 @@ import base64
 from collections.abc import AsyncIterator
 from typing import Any
 
-import cortexgrid
 from cortexgrid import serve
-from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import StreamingResponse
 
-from cortexgrid_infer.core import Message, ToolSpec
-from cortexgrid_infer.protocols.completion import ServedCompletingModel
+from cortexgrid_infer.core import CompletingModel, CompletionChunk, Message, ToolSpec
 from cortexgrid_infer.serve_apps.base import ENABLE_THINKING_PARAM
 from cortexgrid_infer.serve_apps.gemini.base import DEFAULT_API_KEY_SECRET, GeminiModel
 from cortexgrid_infer.serve_apps.streamed_completion import StreamedCompletionWriter
-
-_app = FastAPI()
+from cortexgrid_infer.utils import Tool
 
 # Gemini 3 rejects a function call replayed without the thought signature it was
 # returned with, and signatures do not survive the trip through the client as
@@ -110,8 +105,8 @@ def to_gemini_tools(
     return [{"function_declarations": declarations}]
 
 
-@serve.ingress(_app)
-class GeminiText2Text(GeminiModel):
+@serve.ingress
+class GeminiText2Text(GeminiModel, CompletingModel):
     @classmethod
     def config(
         cls,
@@ -124,18 +119,20 @@ class GeminiText2Text(GeminiModel):
             ENABLE_THINKING_PARAM: enable_thinking,
         }
 
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[ServedCompletingModel]) -> ServedCompletingModel:
-        return ServedCompletingModel(key=deployment.key, url=deployment.url)
-
-    @_app.post("/complete")
-    async def complete(self, body: dict[str, Any]) -> StreamingResponse:
-        system_prompt, contents = to_gemini_contents(body["messages"])
-        tools = to_gemini_tools(body.get("tools"))
+    @serve.endpoint
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[Tool] | None = None,
+        max_new_tokens: int | None = None,
+        temperature: float = 0.7,
+    ) -> AsyncIterator[CompletionChunk]:
+        system_prompt, contents = to_gemini_contents(messages)
+        gemini_tools = to_gemini_tools(tools)
 
         generate_config: dict[str, Any] = {
-            "max_output_tokens": body.get("max_new_tokens", 16 * 1024),
-            "temperature": body.get("temperature", 0.7),
+            "max_output_tokens": 16 * 1024 if max_new_tokens is None else max_new_tokens,
+            "temperature": temperature,
             "thinking_config": (
                 {"include_thoughts": True}
                 if self._config.get(ENABLE_THINKING_PARAM, "true") == "true"
@@ -144,40 +141,30 @@ class GeminiText2Text(GeminiModel):
         }
         if system_prompt:
             generate_config["system_instruction"] = system_prompt
-        if tools:
-            generate_config["tools"] = tools
+        if gemini_tools:
+            generate_config["tools"] = gemini_tools
 
-        async def stream() -> AsyncIterator[bytes]:
-            writer = StreamedCompletionWriter()
-            chunks = await self._client.aio.models.generate_content_stream(
-                model=self._model, contents=contents, config=generate_config
-            )
-            async for chunk in chunks:
-                if not chunk.candidates or not chunk.candidates[0].content:
-                    continue
-                for part in chunk.candidates[0].content.parts or []:
-                    if part.function_call:
-                        arguments = dict(part.function_call.args or {})
-                        line = writer.read_tool_call(
-                            part.function_call.name, arguments, part.function_call.id
-                        )
-                        yield line
-
-                    elif part.text and part.thought:
-                        line = writer.read_thinking(part.text)
-                        yield line
-
-                    elif part.text:
-                        line = writer.read_content(part.text)
-                        yield line
-            for line in writer.finish():
-                yield line
-
-        return StreamingResponse(stream(), media_type="application/x-ndjson")
-
-    @_app.post("/last_hidden_states")
-    async def last_hidden_states(self, body: dict[str, Any]) -> None:
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="Gemini does not expose its models' hidden states",
+        writer = StreamedCompletionWriter()
+        responses = await self._client.aio.models.generate_content_stream(
+            model=self._model, contents=contents, config=generate_config
         )
+        async for response in responses:
+            if not response.candidates or not response.candidates[0].content:
+                continue
+            for part in response.candidates[0].content.parts or []:
+                if part.function_call:
+                    arguments = dict(part.function_call.args or {})
+                    chunk = writer.read_tool_call(
+                        part.function_call.name, arguments, part.function_call.id
+                    )
+                    yield chunk
+
+                elif part.text and part.thought:
+                    chunk = writer.read_thinking(part.text)
+                    yield chunk
+
+                elif part.text:
+                    chunk = writer.read_content(part.text)
+                    yield chunk
+        for chunk in writer.finish():
+            yield chunk

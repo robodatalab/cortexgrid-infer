@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import unittest
-from functools import partial
 
-from cortexgrid_infer.utils import (
-    build_tool_map,
-    function_to_tool_spec,
-    normalize_tools,
-    tool_name,
-)
+from pydantic import TypeAdapter
+
+from cortexgrid_infer.utils import Tool, function_to_tool_spec
 
 
 class TestFunctionToToolSpec(unittest.TestCase):
@@ -46,60 +42,43 @@ class TestFunctionToToolSpec(unittest.TestCase):
         self.assertEqual(spec["function"]["description"], "")
 
 
-class TestNormalizeTools(unittest.TestCase):
-    def test_none(self):
-        self.assertIsNone(normalize_tools(None))
+class TestTool(unittest.TestCase):
+    def test_a_function_goes_to_json_as_its_spec(self) -> None:
+        def now(timezone: str) -> str:
+            return "noon"
 
-    def test_mixed(self):
-        def my_func(a: str) -> str:
-            """Do something."""
-            return a
+        tool_on_the_wire = TypeAdapter(Tool)
 
-        dict_spec = {
-            "type": "function",
-            "function": {"name": "other", "description": "", "parameters": {}},
-        }
-        result = normalize_tools([my_func, dict_spec])
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["function"]["name"], "my_func")
-        self.assertIs(result[1], dict_spec)
+        answered = tool_on_the_wire.dump_python(now, mode="json")
 
+        self.assertEqual(
+            answered,
+            {
+                "type": "function",
+                "function": {
+                    "name": "now",
+                    "description": "",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"timezone": {"type": "string"}},
+                        "required": ["timezone"],
+                    },
+                },
+            },
+        )
 
-class TestToolName(unittest.TestCase):
-    def test_callable(self):
-        def foo():
-            pass
+    def test_a_spec_goes_to_json_as_it_is(self) -> None:
+        tool_on_the_wire = TypeAdapter(Tool)
 
-        self.assertEqual(tool_name(foo), "foo")
+        answered = tool_on_the_wire.dump_python(
+            {"type": "function", "function": {"name": "other"}}, mode="json"
+        )
 
-    def test_partial(self):
-        def bar(x: int) -> int:
-            return x
+        self.assertEqual(answered, {"type": "function", "function": {"name": "other"}})
 
-        p = partial(bar, x=1)
-        self.assertEqual(tool_name(p), "bar")
+    def test_comes_from_json_as_its_spec(self) -> None:
+        tool_on_the_wire = TypeAdapter(Tool)
 
-    def test_dict(self):
-        spec = {"function": {"name": "baz"}}
-        self.assertEqual(tool_name(spec), "baz")
+        tool = tool_on_the_wire.validate_python({"type": "function", "function": {"name": "other"}})
 
-
-class TestBuildToolMap(unittest.TestCase):
-    def test_none(self):
-        self.assertEqual(build_tool_map(None), {})
-
-    def test_callables(self):
-        def alpha():
-            pass
-
-        def beta():
-            pass
-
-        m = build_tool_map([alpha, beta])
-        self.assertIs(m["alpha"], alpha)
-        self.assertIs(m["beta"], beta)
-
-    def test_ignores_dicts(self):
-        spec = {"function": {"name": "x"}}
-        m = build_tool_map([spec])
-        self.assertEqual(m, {})
+        self.assertEqual(tool, {"type": "function", "function": {"name": "other"}})

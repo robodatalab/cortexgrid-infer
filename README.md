@@ -22,23 +22,24 @@ Upgrading from 0.2.x? See [MIGRATION.md](https://github.com/robodatalab/cortexgr
 A model is two things, and the library keeps them apart:
 
 - **What runs it** — a serve app in `cortexgrid_infer.serve_apps`, named for the task
-  it runs, not for where the model came from. It loads the weights, answers the task's
-  routes (defined in `cortexgrid_infer.protocols`), and names the client that speaks
-  them. One serve app runs every model of its task, whichever source staged it.
+  it runs, not for where the model came from. It loads the weights and serves the
+  task's endpoints, declared by the task's type (`CompletingModel`, say); cortexgrid
+  generates the client that calls them. One serve app runs every model of its task,
+  whichever source staged it.
 - **Where its weights come from** — an importer in `cortexgrid_infer.importers`, one
   per source. It names the model in the registry, downloads the weights, and sizes
   them from the source's metadata. It is handed the serve app, so one importer takes
   any model its source holds.
 
-| Serve app | Task | Runs | Client |
+| Serve app | Task | Runs | Task type |
 |---|---|---|---|
-| `Text2Text` | text to text | any causal LM in the transformers layout, via `AutoModelForCausalLM` | `ServedCompletingModel` (`complete`) |
-| `Text2Image` | text (and image) to image | any diffusers pipeline | `ServedGeneratingModel` (`generate`) |
-| `Image2Mesh` — a base: subclass it with the model's `load` and `make_mesh` | image to mesh | the model the subclass loads, behind the task's `POST /mesh` | `ServedMeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
-| `TextRewriter` | text to text, rewritten | any encoder-decoder LM (T5, BART, Marian, ...) in the transformers layout, via `AutoModelForSeq2SeqLM` | `ServedRewritingModel` (`rewrite`: one text in, one text out) |
-| `AnthropicText2Text` | text to text | the Anthropic API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
-| `GeminiText2Text` | text to text | the Gemini API, forwarded from the cluster | `ServedCompletingModel` (`complete`) |
-| `GeminiText2Image` | text to image | the Gemini API, forwarded from the cluster | `ServedGeneratingModel` (`generate`) |
+| `Text2Text` | text to text | any causal LM in the transformers layout, via `AutoModelForCausalLM` | `CompletingModel` (`complete`), plus its own `loglikelihoods` and `last_hidden_states` |
+| `Text2Image` | text (and image) to image | any diffusers pipeline | `GeneratingModel` (`generate`) |
+| `Image2Mesh` — a base: subclass it with the model's `load` and `make_mesh` | image to mesh | the model the subclass loads, behind the task's `mesh` endpoint | `MeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
+| `TextRewriter` | text to text, rewritten | any encoder-decoder LM (T5, BART, Marian, ...) in the transformers layout, via `AutoModelForSeq2SeqLM` | `RewritingModel` (`rewrite`: one text in, one text out) |
+| `AnthropicText2Text` | text to text | the Anthropic API, forwarded from the cluster | `CompletingModel` (`complete`) |
+| `GeminiText2Text` | text to text | the Gemini API, forwarded from the cluster | `CompletingModel` (`complete`) |
+| `GeminiText2Image` | text to image | the Gemini API, forwarded from the cluster | `GeneratingModel` (`generate`) |
 
 | Importer | Source |
 |---|---|
@@ -61,8 +62,9 @@ need:
 
 One with weights goes through `cortexgrid.import_model`, one without through
 `cortexgrid.register_model`. Once deployed, the `cortexgrid.Deployment` hands back
-the client that speaks the app's routes: `deployment.client()` once the app serves,
-or `deployment.client_async()` at once, with `await model.is_ready()` to ask.
+the client that calls the app's endpoints, typed as the serve app and so as its task
+type: `deployment.client()` once the app serves, or `deployment.client_async()` at
+once, with `await model.is_ready()` to ask.
 
 ## Quick start
 
@@ -94,7 +96,7 @@ cortexgrid.remote(
 deployment = cortexgrid.deploy_model(imp.family, imp.suffix, cortexgrid.IMPORTED, timeout=1800)
 
 # 3. Inference — the client blocks until the Ray Serve app is running.
-model = deployment.client()
+model: mg.GeneratingModel = deployment.client()
 
 async def run():
     result = await mg.generate(model, "a red bicycle on a beach at sunrise")
@@ -249,10 +251,13 @@ it is the floor; only quantizing the weights or running fewer forwards moves it.
 
 ## Inference
 
-`complete` streams `CompletionChunk`s (`.content`, `.thinking`, `.tool_calls`, `.finish_reason`):
+`complete` streams `CompletionChunk`s (`.content`, `.thinking`, `.tool_calls`, `.finish_reason`).
+`tools` are Python functions or tool specs; a function goes to the model as its spec,
+and each `ToolCall` comes back as data (`.id`, `.name`, `.arguments`) for the caller
+to run:
 
 ```python
-model = deployment.client()
+model: mg.CompletingModel = deployment.client()
 messages = [{"role": "user", "content": "Explain RAG in one sentence."}]
 
 async for chunk in mg.complete(model, messages, max_new_tokens=512, temperature=0.7):
@@ -293,9 +298,9 @@ a re-deploy rather than a re-registration.
 
 A replica asks for no hardware at all, so it is placed on any node, CPU-only
 included. From there it deploys and streams exactly like a cluster-served model:
-`deployment.client()` returns the same `ServedCompletingModel`. Anthropic
+`deployment.client()` is a `CompletingModel` like `Text2Text`'s. Anthropic
 reports tool calls as structured blocks rather than as generated text, so the
-serve app re-encodes them into the text form the client parses.
+serve app turns them into `ToolCall`s as they come.
 
 ### Gemini
 
@@ -317,16 +322,14 @@ cortexgrid.register_model(
 Everything said above for Anthropic holds: `config` carries the model name and
 the name of the secret (`api_key_secret="..."` to use another), both editable on
 the model card; a replica needs no hardware; and `deployment.client()`
-is a `ServedCompletingModel`, with Gemini's function calls re-encoded into the
-text form the client parses.
+is a `CompletingModel`, with Gemini's function calls turned into `ToolCall`s.
 
-`GeminiText2Image` answers the same `/generate` route as `Text2Image`, so its
-client is a `ServedGeneratingModel`:
+`GeminiText2Image` is a `GeneratingModel` like `Text2Image`:
 
 ```python
 entry = mg.Hosted("gemini-2.5-flash-image", mg.GeminiText2Image)
 ...
-model = deployment.client()
+model: mg.GeneratingModel = deployment.client()
 picture = await mg.generate(model, "a fox in the snow", size=2048)
 ```
 
@@ -345,14 +348,11 @@ diffusion settings with no Gemini counterpart, and come back as `None`.
 | `Text2Text`, `Text2Image`, `TextRewriter`, `Image2Mesh` | Serve apps that run weights (`LocalModel`s). |
 | `AnthropicText2Text` | Serve app that forwards to the Anthropic API (a `HostedModel`). |
 | `GeminiText2Text`, `GeminiText2Image` | Serve apps that forward to the Gemini API (`HostedModel`s sharing the `GeminiModel` base). |
-| `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `config()` (the model card's defaults, `compile: "false"` among them), `client(deployment)`. |
-| `HostedModel` | Base of the serve apps that forward: `config(model_id, **settings)`, `requirements()`, `client(deployment)`. |
+| `LocalModel` | Base of the serve apps that run weights: `ignore_patterns()`, `bytes_per_param`, `min_vram_gb`, `requirements(weights)`, `config()` (the model card's defaults, `compile: "false"` among them). |
+| `HostedModel` | Base of the serve apps that forward: `config(model_id, **settings)`, `requirements()`. |
 | `Weights(params=None, file_bytes=0)` | What an importer reads about the weights, handed to the serve app to size a replica. |
-| `complete(model, messages, tools=None, max_new_tokens=2048, temperature=0.7, **kw)` | Async stream of `CompletionChunk` for a `CompletingModel`. |
-| `generate(model, prompt, *, image=None, **kw) -> GeneratedImage` | One image from a `GeneratingModel`. |
-| `ServedCompletingModel(key, url)` | Client for any deployed completion app. |
-| `ServedGeneratingModel(key, url)` | Client for any deployed text-to-image app. |
-| `ServedMeshingModel(key, url)` | Client for any deployed image-to-mesh app. |
+| `complete(model, messages, tools=None, max_new_tokens=None, temperature=0.7)` | Async stream of `CompletionChunk` for a `CompletingModel`. |
+| `generate(model, prompt, *, image=None, steps=None, guidance=None, size=1024, seed=None) -> GeneratedImage` | One image from a `GeneratingModel`. |
 | `split_model_id(model_id) -> (family, suffix)` | The registry identity an importer derives. |
 | `detect_device()` | The torch device a serve app should load onto. |
 | `compiling.Mode.GRAPHED` / `compiling.Mode.FUSED` | The two modes a serve app chooses between. See [Compilation](#compilation). |
@@ -360,19 +360,19 @@ diffusion settings with no Gemini counterpart, and come back as `None`.
 | `ModelDeployFailed` | Re-exported from cortexgrid; subclasses `RuntimeError`. |
 
 Types: `CompletingModel`, `GeneratingModel`, `MeshingModel`, `RewritingModel` (each
-a `cortexgrid.DeploymentClient`), `CompletionChunk`, `GeneratedImage`, `GeneratedMesh`, `ToolCall`, `Message`, `Tool`,
-`ToolSpec`.
+the abstract base of its task's serve apps, declaring the task's endpoints),
+`CompletionChunk`, `GeneratedImage`, `GeneratedMesh`, `ToolCall`, `Message`, `Tool`,
+`ToolSpec`, `Tensor`.
 
 Extending it:
 
 - **A new source** is one importer: subclass `Importer` with `download(local_dir)`
   and `weights()`, and every serve app whose weight format it delivers runs its
   models unchanged.
-- **A new hosted API** is one serve app: subclass `HostedModel`, and register it
-  with `Hosted`. A text-to-text one only has to stream text from `POST /complete`,
-  inlining tool calls as `<tool_call>{"name": ..., "arguments": {...}}</tool_call>`
-  (there is an `encode_tool_call` for upstreams that report them structurally) —
-  then `ServedCompletingModel` is its client, unchanged.
+- **A new hosted API** is one serve app: subclass `HostedModel` and the task's type,
+  and register it with `Hosted`. A text-to-text one subclasses `CompletingModel` and
+  streams `CompletionChunk`s from its `complete` endpoint, with
+  `StreamedCompletionWriter` turning the upstream's text and tool calls into them.
 - **A model no task's serve app can load** gets its own serve app — an `Image2Mesh`
   subclass, say, with `load` and `make_mesh`, and `compile` if compiling it pays —
   and, if its source is unusual too, its own importer.
