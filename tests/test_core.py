@@ -8,11 +8,15 @@ from functools import partial
 from typing import Any, Sequence
 
 import cortexgrid
+import torch
+from parameterized import parameterized
+from pydantic import TypeAdapter
 
 from cortexgrid_infer.core import (
     CompletingModel,
     CompletionChunk,
     Message,
+    Tensor,
     Tool,
     ToolCall,
     complete,
@@ -86,3 +90,37 @@ class TestComplete(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0].content, "stub")
         self.assertEqual(chunks[0].finish_reason, "stop")
+
+
+class TestTensor(unittest.TestCase):
+    @parameterized.expand([
+        ("scalar", torch.tensor(2.0), 2.0),
+        ("empty", torch.zeros(0), []),
+        ("vector", torch.tensor([1.0, 2.0]), [1.0, 2.0]),
+        ("matrix", torch.tensor([[1.0, 0.0], [0.0, 1.0]]), [[1.0, 0.0], [0.0, 1.0]]),
+        ("integers", torch.tensor([1, 2]), [1, 2]),
+    ])
+    def test_goes_to_json_as_nested_lists(
+        self, _case: str, tensor: torch.Tensor, expected: object
+    ) -> None:
+        tensor_on_the_wire = TypeAdapter(Tensor)
+
+        answered = tensor_on_the_wire.dump_python(tensor, mode="json")
+
+        self.assertEqual(answered, expected)
+
+    @parameterized.expand([
+        ("scalar", 2.0, torch.tensor(2.0)),
+        ("empty", [], torch.zeros(0)),
+        ("vector", [1.0, 2.0], torch.tensor([1.0, 2.0])),
+        ("matrix", [[1.0, 0.0], [0.0, 1.0]], torch.tensor([[1.0, 0.0], [0.0, 1.0]])),
+        ("integers", [1, 2], torch.tensor([1, 2])),
+    ])
+    def test_comes_from_json_as_a_tensor(
+        self, _case: str, answered: object, expected: torch.Tensor
+    ) -> None:
+        tensor_on_the_wire = TypeAdapter(Tensor)
+
+        tensor = tensor_on_the_wire.validate_python(answered)
+
+        self.assertTrue(torch.equal(tensor, expected))

@@ -6,10 +6,19 @@ import abc
 from dataclasses import dataclass, field
 from functools import partial
 from collections.abc import AsyncIterator
-from typing import Any, Callable, Sequence
+from typing import Annotated, Any, Callable, Sequence
 
 import cortexgrid
 import numpy as np
+import torch
+from pydantic import PlainSerializer, PlainValidator
+
+
+Tensor = Annotated[
+    torch.Tensor,
+    PlainValidator(torch.tensor),
+    PlainSerializer(torch.Tensor.tolist),
+]
 
 
 @dataclass
