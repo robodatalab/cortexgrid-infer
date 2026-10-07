@@ -5,6 +5,8 @@ import json
 import re
 from typing import Any, Sequence
 
+from cortexgrid_infer.core import CompletionChunk, ToolCall
+
 _tool_call_id_counter = itertools.count()
 
 TOOL_CALL_OPENERS = ["<tool_call>", "<|tool_call|>", "```tool_call"]
@@ -22,22 +24,6 @@ TOOL_CALL_PATTERNS = [
 def new_tool_call_id() -> str:
     number = next(_tool_call_id_counter)
     return f"call_{number}"
-
-
-def completion_chunk(
-    content: str = "",
-    thinking: str = "",
-    tool_calls: Sequence[dict[str, Any]] = (),
-    finish_reason: str | None = None,
-) -> bytes:
-    chunk = {
-        "content": content,
-        "thinking": thinking,
-        "tool_calls": list(tool_calls),
-        "finish_reason": finish_reason,
-    }
-    line = json.dumps(chunk)
-    return f"{line}\n".encode("utf-8")
 
 
 def _find_opener(text: str, openers: Sequence[str]) -> int | None:
@@ -63,7 +49,7 @@ def _split_at_potential_prefix(text: str, openers: Sequence[str]) -> tuple[str, 
     return text, ""
 
 
-def tool_calls_in(text: str) -> tuple[str, list[dict[str, Any]]]:
+def tool_calls_in(text: str) -> tuple[str, list[ToolCall]]:
     tool_calls = []
     clean_text = text
     for pattern in TOOL_CALL_PATTERNS:
@@ -76,7 +62,8 @@ def tool_calls_in(text: str) -> tuple[str, list[dict[str, Any]]]:
                 continue
             arguments = data.get("arguments", {})
             call_id = new_tool_call_id()
-            tool_calls.append({"id": call_id, "name": name, "arguments": arguments})
+            tool_call = ToolCall(id=call_id, name=name, arguments=arguments)
+            tool_calls.append(tool_call)
         clean_text = pattern.sub("", clean_text)
     stripped = clean_text.strip()
     return stripped, tool_calls
@@ -90,28 +77,28 @@ class StreamedCompletionWriter:
         self._tool_call_text = ""
         self._made_a_tool_call = False
 
-    def read_content(self, text: str) -> bytes:
-        return completion_chunk(content=text)
+    def read_content(self, text: str) -> CompletionChunk:
+        return CompletionChunk(content=text)
 
-    def read_thinking(self, text: str) -> bytes:
-        return completion_chunk(thinking=text)
+    def read_thinking(self, text: str) -> CompletionChunk:
+        return CompletionChunk(thinking=text)
 
     def read_tool_call(
         self, name: str, arguments: dict[str, Any], call_id: str | None = None
-    ) -> bytes:
+    ) -> CompletionChunk:
         self._made_a_tool_call = True
         tool_call_id = call_id or new_tool_call_id()
-        tool_call = {"id": tool_call_id, "name": name, "arguments": arguments}
-        return completion_chunk(tool_calls=[tool_call])
+        tool_call = ToolCall(id=tool_call_id, name=name, arguments=arguments)
+        return CompletionChunk(tool_calls=[tool_call])
 
-    def read(self, text: str) -> list[bytes]:
+    def read(self, text: str) -> list[CompletionChunk]:
         if not text:
             return []
         if self._in_tool_call:
             self._tool_call_text += text
             return []
         self._pending += text
-        lines: list[bytes] = []
+        chunks: list[CompletionChunk] = []
         openers = [THINKING_OPENER, *TOOL_CALL_OPENERS]
         while self._pending and not self._in_tool_call:
             if self._in_thinking:
@@ -121,11 +108,11 @@ class StreamedCompletionWriter:
                         self._pending, [THINKING_CLOSER]
                     )
                     if thought:
-                        lines.append(completion_chunk(thinking=thought))
+                        chunks.append(CompletionChunk(thinking=thought))
                     break
                 if closer_pos:
                     thought = self._pending[:closer_pos]
-                    lines.append(completion_chunk(thinking=thought))
+                    chunks.append(CompletionChunk(thinking=thought))
                 self._pending = self._pending[closer_pos + len(THINKING_CLOSER) :]
                 self._in_thinking = False
                 continue
@@ -134,12 +121,12 @@ class StreamedCompletionWriter:
             if opener_pos is None:
                 safe, self._pending = _split_at_potential_prefix(self._pending, openers)
                 if safe:
-                    lines.append(completion_chunk(content=safe))
+                    chunks.append(CompletionChunk(content=safe))
                 break
 
             before = self._pending[:opener_pos]
             if before:
-                lines.append(completion_chunk(content=before))
+                chunks.append(CompletionChunk(content=before))
             if self._pending.startswith(THINKING_OPENER, opener_pos):
                 self._pending = self._pending[opener_pos + len(THINKING_OPENER) :]
                 self._in_thinking = True
@@ -147,19 +134,19 @@ class StreamedCompletionWriter:
                 self._tool_call_text = self._pending[opener_pos:]
                 self._in_tool_call = True
                 self._pending = ""
-        return lines
+        return chunks
 
-    def finish(self) -> list[bytes]:
-        lines: list[bytes] = []
+    def finish(self) -> list[CompletionChunk]:
+        chunks: list[CompletionChunk] = []
         if self._pending and self._in_thinking:
-            lines.append(completion_chunk(thinking=self._pending))
+            chunks.append(CompletionChunk(thinking=self._pending))
         elif self._pending:
-            lines.append(completion_chunk(content=self._pending))
+            chunks.append(CompletionChunk(content=self._pending))
         clean_text, tool_calls = tool_calls_in(self._tool_call_text)
         if clean_text:
-            lines.append(completion_chunk(content=clean_text))
+            chunks.append(CompletionChunk(content=clean_text))
         if tool_calls:
-            lines.append(completion_chunk(tool_calls=tool_calls))
+            chunks.append(CompletionChunk(tool_calls=tool_calls))
         elif not self._made_a_tool_call:
-            lines.append(completion_chunk(finish_reason="stop"))
-        return lines
+            chunks.append(CompletionChunk(finish_reason="stop"))
+        return chunks

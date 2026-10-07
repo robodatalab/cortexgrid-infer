@@ -1,28 +1,25 @@
 """The text-to-image serve app that forwards to the Gemini API.
 
-It answers the same `POST /generate` route as `Text2Image` (see
-`cortexgrid_infer.protocols.imaging`), so the same client talks to it. It takes a prompt
+It is a `GeneratingModel` like `Text2Image` (see
+`cortexgrid_infer.core.GeneratingModel`), so a caller holds either the same way. It takes a prompt
 only. Of the sampling options, `size` and `seed` have a Gemini counterpart;
 `steps` and `guidance` are diffusion settings, and are reported back as unused.
 """
 
 from __future__ import annotations
 
-import base64
 import io
 import time
 from typing import Any
 
-import cortexgrid
 from cortexgrid import serve
-from fastapi import FastAPI, HTTPException
+from fastapi import HTTPException
 from google.genai import types
 from PIL import Image
+from pydantic import Base64Bytes
 
-from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
+from cortexgrid_infer.core import GeneratedImage, GeneratingModel
 from cortexgrid_infer.serve_apps.gemini.base import GeminiModel
-
-_app = FastAPI()
 
 
 def image_size(size: int) -> str | None:
@@ -61,21 +58,24 @@ def no_image_reason(response: types.GenerateContentResponse) -> str:
     return f"finish reason {candidate.finish_reason if candidate else None}"
 
 
-@serve.ingress(_app)
-class GeminiText2Image(GeminiModel):
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[ServedGeneratingModel]) -> ServedGeneratingModel:
-        return ServedGeneratingModel(key=deployment.key, url=deployment.url)
-
-    @_app.post("/generate")
-    async def generate(self, body: dict[str, Any]) -> dict[str, Any]:
-        if body.get("image"):
+@serve.ingress
+class GeminiText2Image(GeminiModel, GeneratingModel):
+    @serve.endpoint
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        image: Base64Bytes | None = None,
+        steps: int | None = None,
+        guidance: float | None = None,
+        size: int = 1024,
+        seed: int | None = None,
+    ) -> GeneratedImage:
+        if image:
             raise HTTPException(
                 status_code=400,
                 detail=f"{type(self).__name__} takes a prompt only, not an image",
             )
-        size = int(body.get("size") or 1024)
-        seed = body.get("seed")
 
         # Square, like `Text2Image` without a reference picture.
         image_config: dict[str, Any] = {"aspect_ratio": "1:1"}
@@ -91,7 +91,7 @@ class GeminiText2Image(GeminiModel):
 
         t0 = time.time()
         response = await self._client.aio.models.generate_content(
-            model=self._model, contents=body["prompt"], config=config
+            model=self._model, contents=prompt, config=config
         )
         duration = time.time() - t0
 
@@ -106,12 +106,15 @@ class GeminiText2Image(GeminiModel):
             )
 
         png, width, height = to_png(data)
-        return {
-            "image": base64.b64encode(png).decode("ascii"),
-            "width": width,
-            "height": height,
-            "steps": None,
-            "guidance": None,
-            "seed": seed,
-            "duration_s": round(duration, 2),
-        }
+        generated = GeneratedImage(
+            image=png,
+            width=width,
+            height=height,
+            params={
+                "steps": None,
+                "guidance": None,
+                "seed": seed,
+                "duration_s": round(duration, 2),
+            },
+        )
+        return generated

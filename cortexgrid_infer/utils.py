@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import inspect
 from functools import partial
-from typing import Any, Callable, Sequence, get_type_hints
+from typing import Annotated, Any, Callable, get_type_hints
 
-from cortexgrid_infer.core import Tool, ToolSpec
+from pydantic import PlainSerializer, PlainValidator
+
+ToolSpec = dict[str, Any]
 
 
 def get_underlying_func(func: Callable | partial) -> Callable:
@@ -74,27 +76,14 @@ def function_to_tool_spec(func: Callable[..., Any]) -> ToolSpec:
     }
 
 
-def normalize_tools(tools: Sequence[Tool] | None) -> list[ToolSpec] | None:
-    """Convert a list of tools (functions or dicts) to tool specs."""
-    if tools is None:
-        return None
-    return [function_to_tool_spec(t) if callable(t) else t for t in tools]
+def tool_spec(tool: Callable[..., Any] | ToolSpec) -> ToolSpec:
+    if callable(tool):
+        return function_to_tool_spec(tool)
+    return tool
 
 
-def tool_name(t: Tool) -> str:
-    if callable(t):
-        underlying = get_underlying_func(t)
-        return getattr(t, "__name__", underlying.__name__)
-    return t.get("function", {}).get("name", "unknown")
-
-
-def build_tool_map(tools: Sequence[Tool] | None) -> dict[str, Callable[..., Any]]:
-    """Build mapping from tool names to callable functions."""
-    tool_map: dict[str, Callable[..., Any]] = {}
-    if tools:
-        for tool in tools:
-            if callable(tool):
-                underlying = get_underlying_func(tool)
-                name = getattr(tool, "__name__", underlying.__name__)
-                tool_map[name] = tool
-    return tool_map
+Tool = Annotated[
+    Callable[..., Any] | ToolSpec,
+    PlainValidator(dict),
+    PlainSerializer(tool_spec),
+]

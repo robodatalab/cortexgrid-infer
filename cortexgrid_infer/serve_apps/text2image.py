@@ -1,5 +1,5 @@
 """The text-to-image serve app: a diffusers pipeline loaded from the cortexgrid
-registry, answering `POST /generate` (see `cortexgrid_infer.protocols.imaging`).
+registry, answering its `generate` endpoint (see `cortexgrid_infer.core.GeneratingModel`).
 
 The pipeline class is not hardcoded: it is read from the model's
 ``model_index.json`` (``_class_name``) and resolved against ``diffusers``, so
@@ -10,7 +10,6 @@ free — the reference is forwarded when the request carries one.
 
 from __future__ import annotations
 
-import base64
 import io
 import json
 import os
@@ -22,17 +21,15 @@ from typing import Any
 import cortexgrid
 from cortexgrid import serve
 import diffusers
-from fastapi import FastAPI
 from PIL import Image, ImageOps
+from pydantic import Base64Bytes
 import torch
 
 from cortexgrid_infer import compiling
+from cortexgrid_infer.core import GeneratedImage, GeneratingModel
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
 from cortexgrid_infer.serve_apps.base import COMPILE_PARAM, LocalModel
 
-
-_app = FastAPI()
 
 # FLUX.2 base (non-distilled) defaults from the model card; applied when the
 # caller omits them. Reasonable for other diffusers pipelines too.
@@ -54,8 +51,7 @@ def _round_to_multiple(x: int, base: int = 16) -> int:
     return max(base, (x // base) * base)
 
 
-def _decode_image(image_b64: str, max_side: int) -> Any:
-    raw = base64.b64decode(image_b64)
+def _decode_image(raw: bytes, max_side: int) -> Any:
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(raw))).convert("RGB")
     w, h = img.size
     scale = max_side / max(w, h)
@@ -72,17 +68,13 @@ def _pipeline_class(model_dir: Path) -> Any:
     return getattr(diffusers, class_name)
 
 
-@serve.ingress(_app)
-class Text2Image(LocalModel):
+@serve.ingress
+class Text2Image(LocalModel, GeneratingModel):
     @classmethod
     def ignore_patterns(cls) -> list[str]:
         """The files no pipeline loads, plus the globs in HF_IMAGE_SNAPSHOT_IGNORE."""
         extra = os.environ.get("HF_IMAGE_SNAPSHOT_IGNORE", "")
         return _DEFAULT_IGNORE + [p.strip() for p in extra.split(",") if p.strip()]
-
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[ServedGeneratingModel]) -> ServedGeneratingModel:
-        return ServedGeneratingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         path = cortexgrid.load_model(deployment.family, deployment.suffix, deployment.run_name)
@@ -103,17 +95,21 @@ class Text2Image(LocalModel):
             else []
         )
 
-    @_app.post("/generate")
-    async def generate(self, body: dict[str, Any]) -> dict[str, Any]:
-        prompt = body["prompt"]
-        size = int(body.get("size") or 1024)
-        steps = int(body.get("steps") or _DEFAULT_STEPS)
-        guidance = float(
-            body["guidance"] if body.get("guidance") is not None else _DEFAULT_GUIDANCE
-        )
-        seed = body.get("seed")
+    @serve.endpoint
+    async def generate(
+        self,
+        prompt: str,
+        *,
+        image: Base64Bytes | None = None,
+        steps: int | None = None,
+        guidance: float | None = None,
+        size: int = 1024,
+        seed: int | None = None,
+    ) -> GeneratedImage:
+        steps = steps or _DEFAULT_STEPS
+        guidance = _DEFAULT_GUIDANCE if guidance is None else guidance
 
-        ref = _decode_image(body["image"], size) if body.get("image") else None
+        ref = _decode_image(image, size) if image else None
         generator = None
         if seed is not None:
             generator = torch.Generator(device="cpu").manual_seed(int(seed))
@@ -140,15 +136,18 @@ class Text2Image(LocalModel):
         result = self._pipe(**call)
         duration = time.time() - t0
 
-        image = result.images[0]
+        picture = result.images[0]
         buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return {
-            "image": base64.b64encode(buffer.getvalue()).decode("ascii"),
-            "width": image.width,
-            "height": image.height,
-            "steps": steps,
-            "guidance": guidance,
-            "seed": seed,
-            "duration_s": round(duration, 2),
-        }
+        picture.save(buffer, format="PNG")
+        generated = GeneratedImage(
+            image=buffer.getvalue(),
+            width=picture.width,
+            height=picture.height,
+            params={
+                "steps": steps,
+                "guidance": guidance,
+                "seed": seed,
+                "duration_s": round(duration, 2),
+            },
+        )
+        return generated

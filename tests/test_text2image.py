@@ -9,7 +9,6 @@ from unittest import mock
 import cortexgrid
 
 from cortexgrid_infer.importers.huggingface import HuggingFaceImporter
-from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
 from cortexgrid_infer.serve_apps.text2image import Text2Image
 
 
@@ -19,7 +18,7 @@ class TestText2ImageForTheImporter(unittest.TestCase):
     def test_the_model_card_serves_eager_unless_told_otherwise(self):
         self.assertEqual(Text2Image.config(), {"compile": "false"})
 
-    def test_client_speaks_the_deployed_app(self):
+    def test_client_calls_the_deployed_app_s_endpoints(self):
         deployment = cortexgrid.Deployment(
             key=cortexgrid.DeploymentKey("F", "S", "R"),
             config={},
@@ -33,12 +32,9 @@ class TestText2ImageForTheImporter(unittest.TestCase):
 
         model = Text2Image.client(deployment)
 
-        self.assertEqual(
-            model,
-            ServedGeneratingModel(
-                key=cortexgrid.DeploymentKey("F", "S", "R"), url="http://h/r/F/S/R"
-            ),
-        )
+        self.assertIs(type(model), Text2Image.client)
+        self.assertEqual(model.key, cortexgrid.DeploymentKey("F", "S", "R"))
+        self.assertEqual(model.url, "http://h/r/F/S/R")
 
     def test_skips_what_the_pipeline_never_loads(self):
         self.assertIn("*.md", Text2Image.ignore_patterns())

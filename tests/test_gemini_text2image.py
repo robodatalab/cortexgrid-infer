@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import unittest
 from unittest import mock
@@ -13,7 +12,6 @@ from fastapi import HTTPException
 from google.genai import types
 from PIL import Image
 
-from cortexgrid_infer.protocols.imaging import ServedGeneratingModel
 from cortexgrid_infer.registry import Hosted
 from cortexgrid_infer.serve_apps.gemini.text2image import GeminiText2Image, image_size
 
@@ -42,9 +40,7 @@ class TestHostedGeminiText2Image(unittest.TestCase):
         entry = Hosted("gemini-2.5-flash-image", GeminiText2Image)
         self.assertEqual((entry.family, entry.suffix), ("gemini-2.5-flash", "image"))
 
-    def test_client_is_the_shared_generating_client(self):
-        # The serve app answers the same /generate route as Text2Image, so
-        # there is nothing Gemini-specific left on the client side.
+    def test_client_calls_the_generate_endpoint(self):
         deployment = cortexgrid.Deployment(
             key=cortexgrid.DeploymentKey("gemini-2.5-flash", "image", "imported"),
             config={},
@@ -58,13 +54,11 @@ class TestHostedGeminiText2Image(unittest.TestCase):
 
         model = GeminiText2Image.client(deployment)
 
+        self.assertIs(type(model), GeminiText2Image.client)
         self.assertEqual(
-            model,
-            ServedGeneratingModel(
-                key=cortexgrid.DeploymentKey("gemini-2.5-flash", "image", "imported"),
-                url="http://h",
-            ),
+            model.key, cortexgrid.DeploymentKey("gemini-2.5-flash", "image", "imported")
         )
+        self.assertEqual(model.url, "http://h")
 
     def test_asks_for_no_hardware(self):
         self.assertEqual(
@@ -100,22 +94,22 @@ class TestGenerate(unittest.TestCase):
                 cortexgrid.DeploymentKey("gemini-2.5-flash", "image", "imported")
             )
 
-            return asyncio.run(GeminiText2Image.generate(deployment, body)), call
+            return asyncio.run(deployment.generate(**body)), call
 
     def test_returns_the_picture_as_png_with_its_size(self):
         png = _picture("PNG")
 
         result, _call = self._generate(_response(_image_part(png)), {"prompt": "a fox"})
 
-        self.assertEqual(base64.b64decode(result["image"]), png)
-        self.assertEqual((result["width"], result["height"]), (8, 4))
+        self.assertEqual(result.image, png)
+        self.assertEqual((result.width, result.height), (8, 4))
 
     def test_converts_other_formats_to_png(self):
         result, _call = self._generate(
             _response(_image_part(_picture("JPEG"), "image/jpeg")), {"prompt": "a fox"}
         )
 
-        image = Image.open(io.BytesIO(base64.b64decode(result["image"])))
+        image = Image.open(io.BytesIO(result.image))
         self.assertEqual(image.format, "PNG")
 
     def test_reports_diffusion_settings_as_unused(self):
@@ -124,9 +118,9 @@ class TestGenerate(unittest.TestCase):
             {"prompt": "a fox", "steps": 30, "guidance": 3.5, "seed": 7},
         )
 
-        self.assertIsNone(result["steps"])
-        self.assertIsNone(result["guidance"])
-        self.assertEqual(result["seed"], 7)
+        self.assertIsNone(result.params["steps"])
+        self.assertIsNone(result.params["guidance"])
+        self.assertEqual(result.params["seed"], 7)
 
     def test_asks_for_a_square_image_of_the_requested_size(self):
         _result, call = self._generate(
@@ -150,7 +144,7 @@ class TestGenerate(unittest.TestCase):
 
     def test_the_default_size_sends_no_tier(self):
         _result, call = self._generate(
-            _response(_image_part(_picture("PNG"))), {"prompt": "a fox", "size": None}
+            _response(_image_part(_picture("PNG"))), {"prompt": "a fox"}
         )
 
         self.assertEqual(
@@ -159,7 +153,7 @@ class TestGenerate(unittest.TestCase):
 
     def test_refuses_a_reference_image(self):
         with self.assertRaises(HTTPException) as caught:
-            self._generate(_response(), {"prompt": "a fox", "image": "aGk="})
+            self._generate(_response(), {"prompt": "a fox", "image": b"hi"})
 
         self.assertEqual(caught.exception.status_code, 400)
 

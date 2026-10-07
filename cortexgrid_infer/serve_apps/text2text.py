@@ -1,17 +1,16 @@
 """The text-to-text serve app: a causal LM loaded from the cortexgrid registry,
-streaming from `POST /complete`.
+streaming from its `complete` endpoint.
 
 Loads with `AutoModelForCausalLM`, so it runs any causal LM whose weights are
 in the transformers layout, whichever importer staged them. An instruct-tuned
-model emits tool calls as text in the form `ServedCompletingModel` parses, so
-its tokens are forwarded untouched.
+model emits tool calls as text, which `StreamedCompletionWriter` turns into the
+chunks the endpoint streams.
 """
 
 from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from threading import Thread
@@ -19,8 +18,6 @@ from typing import Any
 
 import cortexgrid
 from cortexgrid import serve
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -32,19 +29,18 @@ from transformers import (
 import torch
 
 from cortexgrid_infer import compiling
+from cortexgrid_infer.core import CompletingModel, CompletionChunk, Message
 from cortexgrid_infer.device import detect_device
-from cortexgrid_infer.protocols.completion import ServedCompletingModel
 from cortexgrid_infer.serve_apps.base import (
     COMPILE_PARAM,
     ENABLE_THINKING_PARAM,
     LocalModel,
 )
 from cortexgrid_infer.serve_apps.streamed_completion import StreamedCompletionWriter
+from cortexgrid_infer.utils import Tool
 
 
 log = logging.getLogger(__name__)
-
-_app = FastAPI()
 
 
 # Prompt + reply a replica is sized for. The static cache is allocated at this
@@ -58,17 +54,6 @@ DEFAULT_MAX_TOTAL_TOKENS = 4096
 
 DTYPE_PARAM = "dtype"
 DEFAULT_DTYPE = "float16"
-
-_RESERVED_BODY_KEYS = {
-    "messages",
-    "tools",
-    "max_new_tokens",
-    "temperature",
-    "top_p",
-    "top_k",
-    "repetition_penalty",
-    "choices",
-}
 
 
 def allowed_next_tokens(
@@ -116,15 +101,11 @@ def last_hidden_state_after(model: PreTrainedModel, read: Cache, ids: list[int])
     return last_layer[0, -1].float()
 
 
-@serve.ingress(_app)
-class Text2Text(LocalModel):
+@serve.ingress
+class Text2Text(LocalModel, CompletingModel):
     @classmethod
     def config(cls) -> dict[str, str]:
         return {**super().config(), ENABLE_THINKING_PARAM: "true"}
-
-    @classmethod
-    def client(cls, deployment: cortexgrid.Deployment[ServedCompletingModel]) -> ServedCompletingModel:
-        return ServedCompletingModel(key=deployment.key, url=deployment.url)
 
     def __init__(self, deployment: cortexgrid.DeploymentKey) -> None:
         path = cortexgrid.load_model(
@@ -214,13 +195,15 @@ class Text2Text(LocalModel):
             continuation_loglikelihood(self._model, prompt_ids, ids) for ids in continuation_ids
         ]
 
-    @_app.post("/loglikelihoods")
-    async def loglikelihoods(self, body: dict[str, Any]) -> dict[str, list[float]]:
+    @serve.endpoint
+    async def loglikelihoods(
+        self, messages: list[Message], continuations: list[str]
+    ) -> list[float]:
         loop = asyncio.get_running_loop()
         loglikelihoods = await loop.run_in_executor(
-            None, self._loglikelihoods, body["messages"], body["continuations"]
+            None, self._loglikelihoods, messages, continuations
         )
-        return {"loglikelihoods": loglikelihoods}
+        return loglikelihoods
 
     def _read_part(
         self, read: Cache | None, part: str, continuations: list[str]
@@ -235,41 +218,35 @@ class Text2Text(LocalModel):
         answered = [hidden_state.tolist() for hidden_state in last_hidden_states]
         return read, answered
 
-    async def _last_hidden_states_of_each_part(
+    @serve.endpoint
+    async def last_hidden_states(
         self, parts: list[str], continuations_of_each_part: list[list[str]]
-    ) -> AsyncIterator[bytes]:
+    ) -> AsyncIterator[list[list[float]]]:
         loop = asyncio.get_running_loop()
         read: Cache | None = None
         for part, continuations in zip(parts, continuations_of_each_part):
             read, last_hidden_states = await loop.run_in_executor(
                 None, self._read_part, read, part, continuations
             )
-            answered = json.dumps({"last_hidden_states": last_hidden_states})
-            line = f"{answered}\n".encode("utf-8")
-            yield line
+            yield last_hidden_states
 
-    @_app.post("/last_hidden_states")
-    async def last_hidden_states(self, body: dict[str, Any]) -> StreamingResponse:
-        last_hidden_states_of_each_part = self._last_hidden_states_of_each_part(
-            body["parts"], body["continuations_of_each_part"]
+    @serve.endpoint
+    async def complete(
+        self,
+        messages: list[Message],
+        tools: list[Tool] | None = None,
+        max_new_tokens: int | None = None,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.0,
+        choices: list[str] | None = None,
+    ) -> AsyncIterator[CompletionChunk]:
+        requested_new_tokens = (
+            self._max_total_tokens if max_new_tokens is None else max_new_tokens
         )
-        return StreamingResponse(
-            last_hidden_states_of_each_part, media_type="application/x-ndjson"
-        )
-
-    @_app.post("/complete")
-    async def complete(self, body: dict[str, Any]) -> StreamingResponse:
-        messages = body["messages"]
-        tools = body.get("tools")
-        max_new_tokens = self._room_for_the_reply(
-            body.get("max_new_tokens", self._max_total_tokens)
-        )
-        temperature = body.get("temperature", 0.7)
-        top_p = body.get("top_p", 0.9)
-        top_k = body.get("top_k", 50)
-        repetition_penalty = body.get("repetition_penalty", 1.0)
-        choices = body.get("choices")
-        extra = {k: v for k, v in body.items() if k not in _RESERVED_BODY_KEYS}
+        room_for_the_reply = self._room_for_the_reply(requested_new_tokens)
+        extra: dict[str, Any] = {}
 
         prompt = self._tokenizer.apply_chat_template(
             messages,
@@ -280,7 +257,7 @@ class Text2Text(LocalModel):
         )
         inputs = self._truncate(
             self._tokenizer(prompt, return_tensors="pt"),
-            self._max_total_tokens - max_new_tokens,
+            self._max_total_tokens - room_for_the_reply,
         ).to(self._model.device)
         if choices:
             prompt_length = inputs["input_ids"].shape[-1]
@@ -298,7 +275,7 @@ class Text2Text(LocalModel):
                     skip_special_tokens=True,
                 )
                 generation_config = {
-                    "max_new_tokens": max_new_tokens,
+                    "max_new_tokens": room_for_the_reply,
                     "temperature": temperature,
                     "top_p": top_p,
                     "top_k": top_k,
@@ -325,17 +302,14 @@ class Text2Text(LocalModel):
 
         loop.run_in_executor(None, generate)
 
-        async def stream() -> AsyncIterator[bytes]:
-            writer = StreamedCompletionWriter()
-            while True:
-                text = await queue.get()
-                if text is None:
-                    break
-                for line in writer.read(text):
-                    yield line
-            if error:
-                raise error[0]
-            for line in writer.finish():
-                yield line
-
-        return StreamingResponse(stream(), media_type="application/x-ndjson")
+        writer = StreamedCompletionWriter()
+        while True:
+            text = await queue.get()
+            if text is None:
+                break
+            for chunk in writer.read(text):
+                yield chunk
+        if error:
+            raise error[0]
+        for chunk in writer.finish():
+            yield chunk
