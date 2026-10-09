@@ -33,7 +33,7 @@ A model is two things, and the library keeps them apart:
 
 | Serve app | Task | Runs | Task type |
 |---|---|---|---|
-| `Text2Text` | text to text | any causal LM in the transformers layout, via `AutoModelForCausalLM` | `CompletingModel` (`complete`), plus its own `loglikelihoods` and `last_hidden_states` |
+| `Text2Text` | text to text | any causal LM in the transformers layout, via `AutoModelForCausalLM` | `CompletingModel` (`complete`), plus its own `loglikelihoods` and `hidden_states_at_layer` |
 | `Text2Image` | text (and image) to image | any diffusers pipeline | `GeneratingModel` (`generate`) |
 | `Image2Mesh` — a base: subclass it with the model's `load` and `make_mesh` | image to mesh | the model the subclass loads, behind the task's `mesh` endpoint | `MeshingModel` (`mesh`: one picture in, a `GeneratedMesh` out) |
 | `TextRewriter` | text to text, rewritten | any encoder-decoder LM (T5, BART, Marian, ...) in the transformers layout, via `AutoModelForSeq2SeqLM` | `RewritingModel` (`rewrite`: one text in, one text out) |
