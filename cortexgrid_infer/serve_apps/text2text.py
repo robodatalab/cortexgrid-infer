@@ -27,7 +27,13 @@ from transformers import (
 import torch
 
 from cortexgrid_infer import compiling
-from cortexgrid_infer.core import CompletingModel, CompletionChunk, Message, Tensor
+from cortexgrid_infer.core import (
+    CausalLMArchitecture,
+    CompletingModel,
+    CompletionChunk,
+    Message,
+    Tensor,
+)
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.serve_apps.base import (
     COMPILE_PARAM,
@@ -181,22 +187,38 @@ class Text2Text(LocalModel, CompletingModel):
         )
         return loglikelihoods
 
-    def _hidden_states_at_layer(self, text: str, layer_idx: int) -> torch.Tensor:
+    def _hidden_states_at_layers(self, text: str, layer_idxs: list[int]) -> torch.Tensor:
         tokenized = self._tokenizer(text)
         ids = tokenized["input_ids"]
         read = torch.tensor([ids], device=self._model.device)
         with torch.inference_mode():
             outputs = self._model(input_ids=read, output_hidden_states=True, logits_to_keep=1)
-        hidden_states = outputs.hidden_states[layer_idx][0].float()
+        hidden_states_of_each_layer = [
+            outputs.hidden_states[layer_idx][0] for layer_idx in layer_idxs
+        ]
+        stacked_hidden_states = torch.stack(hidden_states_of_each_layer)
+        hidden_states = stacked_hidden_states.float()
         return hidden_states
 
     @serve.endpoint
-    async def hidden_states_at_layer(self, text: str, layer_idx: int) -> Tensor:
+    async def hidden_states_at_layers(self, text: str, layer_idxs: int | list[int]) -> Tensor:
+        if not isinstance(layer_idxs, list):
+            layer_idxs = [layer_idxs]
+
         loop = asyncio.get_running_loop()
         hidden_states = await loop.run_in_executor(
-            None, self._hidden_states_at_layer, text, layer_idx
+            None, self._hidden_states_at_layers, text, layer_idxs
         )
         return hidden_states
+
+    @serve.endpoint
+    async def architecture(self) -> CausalLMArchitecture:
+        text_config = self._model.config.get_text_config()
+        architecture = CausalLMArchitecture(
+            layer_count=text_config.num_hidden_layers,
+            hidden_size=text_config.hidden_size,
+        )
+        return architecture
 
     @serve.endpoint
     async def complete(

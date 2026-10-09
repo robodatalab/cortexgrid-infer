@@ -49,6 +49,12 @@ class CompletionChunk:
 Message = dict[str, Any]
 
 
+@dataclass
+class CausalLMArchitecture:
+    layer_count: int
+    hidden_size: int
+
+
 class CompletingModel(abc.ABC):
     @abc.abstractmethod
     def complete(
