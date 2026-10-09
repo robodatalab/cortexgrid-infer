@@ -29,7 +29,7 @@ from transformers import (
 import torch
 
 from cortexgrid_infer import compiling
-from cortexgrid_infer.core import CompletingModel, CompletionChunk, Message
+from cortexgrid_infer.core import CompletingModel, CompletionChunk, Message, Tensor
 from cortexgrid_infer.device import detect_device
 from cortexgrid_infer.serve_apps.base import (
     COMPILE_PARAM,
@@ -99,6 +99,23 @@ def last_hidden_state_after(model: PreTrainedModel, read: Cache, ids: list[int])
         )
     last_layer = outputs.hidden_states[-1]
     return last_layer[0, -1].float()
+
+
+def mean_hidden_state_after(
+    model: PreTrainedModel, read: Cache, ids: list[int], layer: int
+) -> torch.Tensor:
+    unread = torch.tensor([ids], device=model.device)
+    with torch.inference_mode():
+        outputs = model(
+            input_ids=unread,
+            past_key_values=read,
+            use_cache=True,
+            output_hidden_states=True,
+            logits_to_keep=1,
+        )
+    hidden_states_of_the_text = outputs.hidden_states[layer][0].float()
+    mean_hidden_state = hidden_states_of_the_text.mean(dim=0)
+    return mean_hidden_state
 
 
 @serve.ingress
@@ -229,6 +246,22 @@ class Text2Text(LocalModel, CompletingModel):
                 None, self._read_part, read, part, continuations
             )
             yield last_hidden_states
+
+    def _mean_hidden_state(self, context: str, text: str, layer: int) -> torch.Tensor:
+        tokenized_context = self._tokenizer(context)
+        context_ids = tokenized_context["input_ids"]
+        read = read_further(self._model, None, context_ids)
+        text_ids = self._continuation_ids(text)
+        mean_hidden_state = mean_hidden_state_after(self._model, read, text_ids, layer)
+        return mean_hidden_state
+
+    @serve.endpoint
+    async def mean_hidden_state(self, context: str, text: str, layer: int) -> Tensor:
+        loop = asyncio.get_running_loop()
+        mean_hidden_state = await loop.run_in_executor(
+            None, self._mean_hidden_state, context, text, layer
+        )
+        return mean_hidden_state
 
     @serve.endpoint
     async def complete(
