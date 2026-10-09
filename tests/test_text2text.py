@@ -379,3 +379,33 @@ class TestText2TextReadsTheModel(unittest.IsolatedAsyncioTestCase):
                 ]
 
                 torch.testing.assert_close(answered, expected, atol=1e-4, rtol=0)
+
+    async def test_hands_back_the_text_s_hidden_states_at_a_layer_averaged_over_its_tokens(self):
+        cases = [
+            (
+                "the_embeddings_of_the_text_alone",
+                "It rained.\n",
+                0,
+                [-0.0018, -0.0017, 0.0186, -0.0092],
+            ),
+            (
+                "the_top_layer_read_after_the_context",
+                "It rained.\n",
+                1,
+                [-0.2255, -0.2706, 0.8555, -0.2475],
+            ),
+            (
+                "the_top_layer_read_after_another_context",
+                "wet",
+                1,
+                [-0.2296, -0.2668, 0.8475, -0.2542],
+            ),
+        ]
+        deployment = self.build({"It rained.\n": [5, 6, 7], "Ann left.\n": [8, 9], "wet": [10, 11]})
+        for name, context, layer, expected in cases:
+            with self.subTest(name):
+                mean_hidden_state = await deployment.mean_hidden_state(context, "Ann left.\n", layer)
+
+                torch.testing.assert_close(
+                    mean_hidden_state, torch.tensor(expected), atol=1e-4, rtol=0
+                )
