@@ -30,6 +30,7 @@ See `examples/deploy_text_model` for the whole lifecycle, import job included.
 from cortexgrid import ModelDeployFailed
 
 from cortexgrid_infer.core import (
+    CausalLMArchitecture,
     CompletionChunk,
     CompletingModel,
     GeneratedImage,
@@ -64,6 +65,7 @@ from cortexgrid_infer.registry import Hosted, ModelEntry, split_model_id
 from cortexgrid_infer.importers import HuggingFaceImporter, Importer
 
 __all__ = [
+    "CausalLMArchitecture",
     "CompletionChunk",
     "CompletingModel",
     "GeneratedImage",

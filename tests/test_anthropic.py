@@ -186,4 +186,4 @@ class TestToolConversion(unittest.TestCase):
 
 class TestAnthropicText2TextHiddenStates(unittest.TestCase):
     def test_its_client_offers_no_hidden_states(self):
-        self.assertFalse(hasattr(AnthropicText2Text.client, "hidden_states_at_layer"))
+        self.assertFalse(hasattr(AnthropicText2Text.client, "hidden_states_at_layers"))

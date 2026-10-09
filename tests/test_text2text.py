@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 from transformers import Qwen3Config, Qwen3ForCausalLM
 
+from cortexgrid_infer.core import CausalLMArchitecture
 from cortexgrid_infer.serve_apps.text2text import (
     Text2Text,
     allowed_next_tokens,
@@ -339,23 +340,33 @@ class TestText2TextReadsTheModel(unittest.IsolatedAsyncioTestCase):
             with self.subTest(name):
                 self.assertEqual(allowed(0, torch.tensor(sequence)), expected_tokens)
 
-    async def test_hands_back_the_activations_of_every_token_at_the_layer(self):
+    async def test_tells_how_many_layers_it_has_and_how_wide_each_activation_is(self):
+        deployment = self.build({})
+
+        architecture = await deployment.architecture()
+
+        self.assertEqual(architecture, CausalLMArchitecture(layer_count=1, hidden_size=4))
+
+    async def test_hands_back_the_activations_of_every_token_at_each_layer_asked_for(self):
         cases = [
             (
-                "the_embeddings",
-                0,
-                [[0.0117, 0.0210, 0.0257, -0.0323], [-0.0154, -0.0244, 0.0115, 0.0140]],
+                "one_layer",
+                [0],
+                [[[0.0117, 0.0210, 0.0257, -0.0323], [-0.0154, -0.0244, 0.0115, 0.0140]]],
             ),
             (
-                "the_top_layer",
-                1,
-                [[0.4723, 0.9088, 1.0564, -1.3520], [-0.9371, -1.4082, 0.6297, 0.8535]],
+                "several_layers_in_the_order_asked_for",
+                [1, 0],
+                [
+                    [[0.4723, 0.9088, 1.0564, -1.3520], [-0.9371, -1.4082, 0.6297, 0.8535]],
+                    [[0.0117, 0.0210, 0.0257, -0.0323], [-0.0154, -0.0244, 0.0115, 0.0140]],
+                ],
             ),
         ]
         deployment = self.build({"Ann left.\n": [8, 9]})
-        for name, layer_idx, expected in cases:
+        for name, layer_idxs, expected in cases:
             with self.subTest(name):
-                hidden_states = await deployment.hidden_states_at_layer("Ann left.\n", layer_idx)
+                hidden_states = await deployment.hidden_states_at_layers("Ann left.\n", layer_idxs)
 
                 torch.testing.assert_close(
                     hidden_states, torch.tensor(expected), atol=1e-4, rtol=0
