@@ -10,7 +10,6 @@ chunks the endpoint streams.
 from __future__ import annotations
 
 import asyncio
-import copy
 import logging
 from collections.abc import AsyncIterator, Callable
 from threading import Thread
@@ -21,7 +20,6 @@ from cortexgrid import serve
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
-    Cache,
     CompileConfig,
     PreTrainedModel,
     TextIteratorStreamer,
@@ -77,45 +75,6 @@ def continuation_loglikelihood(
     positions = torch.arange(len(continuation_ids), device=log_probabilities.device)
     continuation = torch.tensor(continuation_ids, device=log_probabilities.device)
     return float(log_probabilities[positions, continuation].sum())
-
-
-def read_further(model: PreTrainedModel, read: Cache | None, ids: list[int]) -> Cache:
-    unread = torch.tensor([ids], device=model.device)
-    with torch.inference_mode():
-        outputs = model(input_ids=unread, past_key_values=read, use_cache=True, logits_to_keep=1)
-    return outputs.past_key_values
-
-
-def last_hidden_state_after(model: PreTrainedModel, read: Cache, ids: list[int]) -> torch.Tensor:
-    read_for_the_continuation = copy.deepcopy(read)
-    continuation = torch.tensor([ids], device=model.device)
-    with torch.inference_mode():
-        outputs = model(
-            input_ids=continuation,
-            past_key_values=read_for_the_continuation,
-            use_cache=True,
-            output_hidden_states=True,
-            logits_to_keep=1,
-        )
-    last_layer = outputs.hidden_states[-1]
-    return last_layer[0, -1].float()
-
-
-def mean_hidden_state_after(
-    model: PreTrainedModel, read: Cache, ids: list[int], layer: int
-) -> torch.Tensor:
-    unread = torch.tensor([ids], device=model.device)
-    with torch.inference_mode():
-        outputs = model(
-            input_ids=unread,
-            past_key_values=read,
-            use_cache=True,
-            output_hidden_states=True,
-            logits_to_keep=1,
-        )
-    hidden_states_of_the_text = outputs.hidden_states[layer][0].float()
-    mean_hidden_state = hidden_states_of_the_text.mean(dim=0)
-    return mean_hidden_state
 
 
 @serve.ingress
@@ -222,46 +181,22 @@ class Text2Text(LocalModel, CompletingModel):
         )
         return loglikelihoods
 
-    def _read_part(
-        self, read: Cache | None, part: str, continuations: list[str]
-    ) -> tuple[Cache, list[list[float]]]:
-        tokenized = self._tokenizer(part, add_special_tokens=read is None)
-        part_ids = tokenized["input_ids"]
-        read = read_further(self._model, read, part_ids)
-        continuation_ids = [self._continuation_ids(continuation) for continuation in continuations]
-        last_hidden_states = [
-            last_hidden_state_after(self._model, read, ids) for ids in continuation_ids
-        ]
-        answered = [hidden_state.tolist() for hidden_state in last_hidden_states]
-        return read, answered
+    def _hidden_states_at_layer(self, text: str, layer_idx: int) -> torch.Tensor:
+        tokenized = self._tokenizer(text)
+        ids = tokenized["input_ids"]
+        read = torch.tensor([ids], device=self._model.device)
+        with torch.inference_mode():
+            outputs = self._model(input_ids=read, output_hidden_states=True, logits_to_keep=1)
+        hidden_states = outputs.hidden_states[layer_idx][0].float()
+        return hidden_states
 
     @serve.endpoint
-    async def last_hidden_states(
-        self, parts: list[str], continuations_of_each_part: list[list[str]]
-    ) -> AsyncIterator[list[list[float]]]:
+    async def hidden_states_at_layer(self, text: str, layer_idx: int) -> Tensor:
         loop = asyncio.get_running_loop()
-        read: Cache | None = None
-        for part, continuations in zip(parts, continuations_of_each_part):
-            read, last_hidden_states = await loop.run_in_executor(
-                None, self._read_part, read, part, continuations
-            )
-            yield last_hidden_states
-
-    def _mean_hidden_state(self, context: str, text: str, layer: int) -> torch.Tensor:
-        tokenized_context = self._tokenizer(context)
-        context_ids = tokenized_context["input_ids"]
-        read = read_further(self._model, None, context_ids)
-        text_ids = self._continuation_ids(text)
-        mean_hidden_state = mean_hidden_state_after(self._model, read, text_ids, layer)
-        return mean_hidden_state
-
-    @serve.endpoint
-    async def mean_hidden_state(self, context: str, text: str, layer: int) -> Tensor:
-        loop = asyncio.get_running_loop()
-        mean_hidden_state = await loop.run_in_executor(
-            None, self._mean_hidden_state, context, text, layer
+        hidden_states = await loop.run_in_executor(
+            None, self._hidden_states_at_layer, text, layer_idx
         )
-        return mean_hidden_state
+        return hidden_states
 
     @serve.endpoint
     async def complete(

@@ -339,73 +339,24 @@ class TestText2TextReadsTheModel(unittest.IsolatedAsyncioTestCase):
             with self.subTest(name):
                 self.assertEqual(allowed(0, torch.tensor(sequence)), expected_tokens)
 
-    async def test_hands_back_the_last_hidden_state_after_each_continuation_of_each_part(self):
+    async def test_hands_back_the_activations_of_every_token_at_the_layer(self):
         cases = [
             (
-                "one_part",
-                ["It rained.\n"],
-                [["wet", "home"]],
-                [[[-0.1351, -1.6366, -1.0490, -0.4350], [1.0009, 0.1602, -1.4286, 0.9532]]],
-            ),
-            (
-                "the_second_part_reads_on_from_the_first",
-                ["It rained.\n", "Ann left.\n"],
-                [["home"], ["home"]],
-                [[[1.0009, 0.1602, -1.4286, 0.9532]], [[1.0284, 0.1110, -1.4578, 0.8831]]],
-            ),
-            (
-                "a_part_without_continuations",
-                ["It rained.\n", "Ann left.\n"],
-                [[], ["home"]],
-                [[], [[1.0284, 0.1110, -1.4578, 0.8831]]],
-            ),
-            (
-                "no_parts",
-                [],
-                [],
-                [],
-            ),
-        ]
-        deployment = self.build(
-            {"It rained.\n": [5, 6, 7], "Ann left.\n": [8, 9], "wet": [10, 11], "home": [12]}
-        )
-        for name, parts, continuations_of_each_part, expected in cases:
-            with self.subTest(name):
-                answered = [
-                    last_hidden_states
-                    async for last_hidden_states in deployment.last_hidden_states(
-                        parts, continuations_of_each_part
-                    )
-                ]
-
-                torch.testing.assert_close(answered, expected, atol=1e-4, rtol=0)
-
-    async def test_hands_back_the_text_s_hidden_states_at_a_layer_averaged_over_its_tokens(self):
-        cases = [
-            (
-                "the_embeddings_of_the_text_alone",
-                "It rained.\n",
+                "the_embeddings",
                 0,
-                [-0.0018, -0.0017, 0.0186, -0.0092],
+                [[0.0117, 0.0210, 0.0257, -0.0323], [-0.0154, -0.0244, 0.0115, 0.0140]],
             ),
             (
-                "the_top_layer_read_after_the_context",
-                "It rained.\n",
+                "the_top_layer",
                 1,
-                [-0.2255, -0.2706, 0.8555, -0.2475],
-            ),
-            (
-                "the_top_layer_read_after_another_context",
-                "wet",
-                1,
-                [-0.2296, -0.2668, 0.8475, -0.2542],
+                [[0.4723, 0.9088, 1.0564, -1.3520], [-0.9371, -1.4082, 0.6297, 0.8535]],
             ),
         ]
-        deployment = self.build({"It rained.\n": [5, 6, 7], "Ann left.\n": [8, 9], "wet": [10, 11]})
-        for name, context, layer, expected in cases:
+        deployment = self.build({"Ann left.\n": [8, 9]})
+        for name, layer_idx, expected in cases:
             with self.subTest(name):
-                mean_hidden_state = await deployment.mean_hidden_state(context, "Ann left.\n", layer)
+                hidden_states = await deployment.hidden_states_at_layer("Ann left.\n", layer_idx)
 
                 torch.testing.assert_close(
-                    mean_hidden_state, torch.tensor(expected), atol=1e-4, rtol=0
+                    hidden_states, torch.tensor(expected), atol=1e-4, rtol=0
                 )
