@@ -80,13 +80,30 @@ class TestComplete(unittest.IsolatedAsyncioTestCase):
 
 class TestTensor(unittest.TestCase):
     @parameterized.expand([
-        ("scalar", torch.tensor(2.0), 2.0),
-        ("empty", torch.zeros(0), []),
-        ("vector", torch.tensor([1.0, 2.0]), [1.0, 2.0]),
-        ("matrix", torch.tensor([[1.0, 0.0], [0.0, 1.0]]), [[1.0, 0.0], [0.0, 1.0]]),
-        ("integers", torch.tensor([1, 2]), [1, 2]),
+        ("scalar", torch.tensor(2.0), {"dtype": "float32", "shape": [], "data": "AAAAQA=="}),
+        ("empty", torch.zeros(0), {"dtype": "float32", "shape": [0], "data": ""}),
+        (
+            "vector",
+            torch.tensor([1.0, 2.0]),
+            {"dtype": "float32", "shape": [2], "data": "AACAPwAAAEA="},
+        ),
+        (
+            "matrix",
+            torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+            {"dtype": "float32", "shape": [2, 2], "data": "AACAPwAAAAAAAAAAAACAPw=="},
+        ),
+        (
+            "integers",
+            torch.tensor([1, 2]),
+            {"dtype": "int64", "shape": [2], "data": "AQAAAAAAAAACAAAAAAAAAA=="},
+        ),
+        (
+            "bfloat16",
+            torch.tensor([1.0, -2.0], dtype=torch.bfloat16),
+            {"dtype": "bfloat16", "shape": [2], "data": "gD8AwA=="},
+        ),
     ])
-    def test_goes_to_json_as_nested_lists(
+    def test_goes_to_json_as_its_raw_bytes_with_its_dtype_and_shape(
         self, _case: str, tensor: torch.Tensor, expected: object
     ) -> None:
         tensor_on_the_wire = TypeAdapter(Tensor)
@@ -96,19 +113,37 @@ class TestTensor(unittest.TestCase):
         self.assertEqual(answered, expected)
 
     @parameterized.expand([
-        ("scalar", 2.0, torch.tensor(2.0)),
-        ("empty", [], torch.zeros(0)),
-        ("vector", [1.0, 2.0], torch.tensor([1.0, 2.0])),
-        ("matrix", [[1.0, 0.0], [0.0, 1.0]], torch.tensor([[1.0, 0.0], [0.0, 1.0]])),
-        ("integers", [1, 2], torch.tensor([1, 2])),
+        ("scalar", {"dtype": "float32", "shape": [], "data": "AAAAQA=="}, torch.tensor(2.0)),
+        ("empty", {"dtype": "float32", "shape": [0], "data": ""}, torch.zeros(0)),
+        (
+            "vector",
+            {"dtype": "float32", "shape": [2], "data": "AACAPwAAAEA="},
+            torch.tensor([1.0, 2.0]),
+        ),
+        (
+            "matrix",
+            {"dtype": "float32", "shape": [2, 2], "data": "AACAPwAAAAAAAAAAAACAPw=="},
+            torch.tensor([[1.0, 0.0], [0.0, 1.0]]),
+        ),
+        (
+            "integers",
+            {"dtype": "int64", "shape": [2], "data": "AQAAAAAAAAACAAAAAAAAAA=="},
+            torch.tensor([1, 2]),
+        ),
+        (
+            "bfloat16",
+            {"dtype": "bfloat16", "shape": [2], "data": "gD8AwA=="},
+            torch.tensor([1.0, -2.0], dtype=torch.bfloat16),
+        ),
     ])
-    def test_comes_from_json_as_a_tensor(
+    def test_comes_from_json_as_a_tensor_of_its_dtype_and_shape(
         self, _case: str, answered: object, expected: torch.Tensor
     ) -> None:
         tensor_on_the_wire = TypeAdapter(Tensor)
 
         tensor = tensor_on_the_wire.validate_python(answered)
 
+        self.assertEqual(tensor.dtype, expected.dtype)
         self.assertTrue(torch.equal(tensor, expected))
 
 

@@ -16,10 +16,36 @@ from pydantic import Base64Bytes, PlainSerializer, PlainValidator
 from cortexgrid_infer.utils import Tool, ToolSpec
 
 
+def _encoded_tensor(tensor: torch.Tensor) -> dict[str, Any]:
+    on_the_cpu = tensor.cpu()
+    contiguous = on_the_cpu.contiguous()
+    flat = contiguous.reshape(-1)
+    as_bytes = flat.view(torch.uint8)
+    raw = as_bytes.numpy()
+    encoded = base64.b64encode(raw.tobytes())
+    dtype = str(tensor.dtype)
+    return {
+        "dtype": dtype.removeprefix("torch."),
+        "shape": list(tensor.shape),
+        "data": encoded.decode("ascii"),
+    }
+
+
+def _decoded_tensor(encoded: dict[str, Any]) -> torch.Tensor:
+    raw = base64.b64decode(encoded["data"])
+    writable = bytearray(raw)
+    as_byte_array = np.frombuffer(writable, dtype=np.uint8)
+    as_bytes = torch.from_numpy(as_byte_array)
+    dtype = getattr(torch, encoded["dtype"])
+    flat = as_bytes.view(dtype)
+    tensor = flat.reshape(encoded["shape"])
+    return tensor
+
+
 Tensor = Annotated[
     torch.Tensor,
-    PlainValidator(torch.tensor),
-    PlainSerializer(torch.Tensor.tolist),
+    PlainValidator(_decoded_tensor),
+    PlainSerializer(_encoded_tensor),
 ]
 
 
