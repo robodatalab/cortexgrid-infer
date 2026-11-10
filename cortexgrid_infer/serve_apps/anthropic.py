@@ -153,7 +153,6 @@ class AnthropicText2Text(HostedModel, CompletingModel):
             "model": self._model,
             "messages": anthropic_messages,
             "max_tokens": 16 * 1024 if max_new_tokens is None else max_new_tokens,
-            "temperature": temperature,
         }
         if system_prompt:
             create_kwargs["system"] = system_prompt
