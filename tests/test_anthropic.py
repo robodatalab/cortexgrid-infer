@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest import mock
 
 import cortexgrid
 
+from cortexgrid_infer.core import CompletionChunk
 from cortexgrid_infer.registry import Hosted
 from cortexgrid_infer.serve_apps.anthropic import (
     AnthropicText2Text,
@@ -98,6 +100,41 @@ class TestAnthropicText2TextConfig(unittest.TestCase):
             )
 
         self.assertIn("api_key_secret", str(caught.exception))
+
+
+class TestComplete(unittest.TestCase):
+    def test_sends_claude_no_temperature(self):
+        with (
+            mock.patch(f"{SERVE}.cortexgrid") as mock_cortexgrid,
+            mock.patch(f"{SERVE}.AsyncAnthropic") as mock_client,
+        ):
+            mock_cortexgrid.model_config.return_value = {
+                "model": "claude-opus-5-5",
+                "api_key_secret": "ANTHROPIC_API_KEY",
+            }
+            stream = mock_client.return_value.messages.stream
+            stream.return_value.__aenter__.return_value.__aiter__.return_value = []
+            deployment = AnthropicText2Text(
+                cortexgrid.DeploymentKey("claude-opus-5", "5", "imported")
+            )
+
+            async def run() -> list[CompletionChunk]:
+                return [
+                    chunk
+                    async for chunk in deployment.complete(
+                        [{"role": "user", "content": "hi"}],
+                        max_new_tokens=64,
+                        temperature=0.2,
+                    )
+                ]
+
+            asyncio.run(run())
+
+        stream.assert_called_once_with(
+            model="claude-opus-5-5",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=64,
+        )
 
 
 class TestMessageConversion(unittest.TestCase):
